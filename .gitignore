@@ -1,0 +1,64 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+ENV/
+mvss_venv/
+.mvss_venv/
+backend/venv/
+backend/.venv/
+backend/env/
+backend/mvss_venv/
+backend/.mvss_venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Node / React
+node_modules/
+frontend/node_modules/
+dist/
+build/
+frontend/dist/
+frontend/build/
+.vite/
+
+# NOVAC generated files
+uploads/
+reports/
+backend/uploads/
+backend/reports/
+*.log
+
+# Large ML/model/checkpoint files
+*.pth
+*.pt
+*.onnx
+*.h5
+*.ckpt
+*.bin
+*.safetensors
+*.weights
+
+# Datasets
+datasets/
+backend/datasets/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/

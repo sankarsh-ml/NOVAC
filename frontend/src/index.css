@@ -1,0 +1,26 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100vh;
+}
+
+body {
+  font-family: Inter, Arial, sans-serif;
+  background: #020617;
+  color: white;
+}
+
+a {
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+}

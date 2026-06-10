@@ -1,0 +1,7 @@
+from tampering_service import tampering_service
+
+result = tampering_service.analyze(
+    r"D:\unnamed.png"
+)
+
+print(result)
