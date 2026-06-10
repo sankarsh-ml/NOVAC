@@ -23,6 +23,14 @@ REGION_STYLES = {
         "color": (255, 128, 0),
         "label": "Visual"
     },
+    "forgery_model": {
+        "color": (0, 80, 255),
+        "label": "Forgery"
+    },
+    "text_consistency": {
+        "color": (80, 255, 80),
+        "label": "Text Mismatch"
+    },
     "masking": {
         "color": (255, 0, 0),
         "label": "Masked"
@@ -56,6 +64,8 @@ def _draw_region(image, region, img_area):
         "condition": 0.0005,
         "photo": 0.001,
         "visual": 0.001,
+        "forgery_model": 0.001,
+        "text_consistency": 0.0002,
         "mvss": 0.005
     }.get(
         region_type,

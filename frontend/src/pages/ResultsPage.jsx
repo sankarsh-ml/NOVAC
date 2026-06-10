@@ -107,11 +107,14 @@ function ResultsPage() {
   const photo =
     result?.photo_replacement_analysis ?? {};
 
-  const aiGenerated =
-    result?.ai_generated_analysis ?? {};
-
   const visual =
     result?.visual_consistency_analysis ?? {};
+
+  const forgery =
+    result?.forgery_localization_analysis ?? {};
+
+  const textConsistency =
+    result?.text_consistency_analysis ?? {};
 
   const masking =
     result?.masking_analysis ?? {};
@@ -123,7 +126,9 @@ function ResultsPage() {
     result?.ela_analysis ?? {};
 
   const preprocessing =
-    result?.preprocessing_analysis ?? {};
+    result?.mvss_preprocess_analysis
+    ?? result?.preprocessing_analysis
+    ?? {};
 
   return (
     <>
@@ -306,10 +311,10 @@ function ResultsPage() {
               status={
                 photo.photo_replacement_detected
                   ? photo.ai_photo_suspected
-                    ? "AI-generated or synthetic photo suspected"
+                    ? "Synthetic photo/portrait signal suspected"
                     : "Possible replaced photo/image region"
                   : photo.printed_photo_likely
-                  ? "Printed photo likely; AI-photo signal suppressed"
+                  ? "Printed photo likely; photo signal suppressed"
                   : "No strong photo replacement signal"
               }
               reasons={
@@ -322,29 +327,40 @@ function ResultsPage() {
             />
 
             <DetectorCard
-              title="AI Generated"
-              score={metric(aiGenerated.ai_generation_score)}
+              title="Forgery Localization"
+              score={metric(forgery.forgery_score)}
               status={
-                aiGenerated.ai_generated_suspected
-                  ? aiGenerated.strong_ai_generated_signal
-                    ? "Strong full-document AI signal"
-                    : "Synthetic-image indicators detected"
-                  : aiGenerated.printed_document_likely
-                  ? "Printed document likely; AI signal suppressed"
-                  : "No strong AI-generation signal"
+                forgery.model_available === false
+                  ? "Forgery localization model unavailable"
+                  : forgery.manipulation_detected
+                  ? "Forgery localization model detected possible manipulated region"
+                  : "No strong forgery localization signal"
               }
               reasons={
-                aiGenerated.reasons?.length
-                  ? aiGenerated.reasons
-                  : aiGenerated.supporting_reasons?.length
-                  ? aiGenerated.supporting_reasons
-                  : aiGenerated.suppressed_reasons
+                forgery.model_error
+                  ? [forgery.model_error]
+                  : forgery.reasons
+              }
+            />
+
+            <DetectorCard
+              title="Field Text Consistency"
+              score={metric(textConsistency.field_mismatch_score)}
+              status={
+                textConsistency.font_mismatch_detected
+                  ? "Possible edited text field style mismatch detected"
+                  : "No strong field-level text mismatch detected"
+              }
+              reasons={
+                textConsistency.error
+                  ? [textConsistency.error]
+                  : textConsistency.reasons
               }
             />
 
             <DetectorCard
               title="MVSS Preprocess"
-              score={preprocessing.qr_removed ? 100 : 0}
+              score={metric(preprocessing.removed_region_count)}
               status={
                 preprocessing.qr_removed
                   ? `QR-like region removed before MVSS (${preprocessing.method})`
@@ -354,7 +370,9 @@ function ResultsPage() {
                 preprocessing.error
                   ? [preprocessing.error]
                   : preprocessing.qr_removed
-                  ? [`${preprocessing.qr_regions?.length ?? 0} region(s) masked before MVSS`]
+                  ? [
+                      `${preprocessing.removed_region_count ?? preprocessing.removed_regions?.length ?? 0} region(s) masked before MVSS`
+                    ]
                   : []
               }
             />
@@ -382,12 +400,18 @@ function ResultsPage() {
             />
 
             <DetectorCard
-              title="MVSS"
+              title="Visual Tampering"
               score={metric(tampering.tampering_score)}
-              status={`${tampering.tampered_area_percent ?? 0}% suspicious area`}
+              status={
+                tampering.tampering_detected
+                  ? "MVSS detected suspicious visual manipulation regions"
+                  : "No strong visual tampering signal"
+              }
               reasons={
                 tampering.error
                   ? [tampering.error]
+                  : tampering.suppressed_regions?.length
+                  ? tampering.suppressed_regions.map((region) => region.reason)
                   : []
               }
             />

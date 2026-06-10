@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
+import cv2
 import os
 import re
 import shutil
@@ -49,11 +50,13 @@ from app.services.document_condition_service import analyze_document_condition
 
 from app.services.photo_replacement_service import analyze_photo_replacement
 
-from app.services.ai_generated_service import analyze_ai_generated_image
-
 from app.services.visual_consistency_service import analyze_visual_consistency
 
 from app.services.field_extraction_service import extract_fields
+
+from app.services.forgery_localization_service import analyze_forgery_localization
+
+from app.services.text_consistency_service import analyze_text_consistency
 
 
 router = APIRouter()
@@ -204,6 +207,169 @@ def safe_tampering_analysis(image_path):
         }
 
 
+def _box_iou(region, other):
+
+    x1 = max(region.get("x", 0), other.get("x", 0))
+    y1 = max(region.get("y", 0), other.get("y", 0))
+    x2 = min(
+        region.get("x", 0) + region.get("w", 0),
+        other.get("x", 0) + other.get("w", 0)
+    )
+    y2 = min(
+        region.get("y", 0) + region.get("h", 0),
+        other.get("y", 0) + other.get("h", 0)
+    )
+
+    intersection = max(0, x2 - x1) * max(0, y2 - y1)
+    region_area = max(0, region.get("w", 0)) * max(0, region.get("h", 0))
+    other_area = max(0, other.get("w", 0)) * max(0, other.get("h", 0))
+    union = region_area + other_area - intersection
+
+    if union <= 0:
+        return 0
+
+    return intersection / float(union)
+
+
+def _mvss_score_from_area(tampered_percent, confidence):
+
+    if confidence < 0.35 or tampered_percent < 0.2:
+        return 0
+
+    if tampered_percent < 1:
+        return 2
+
+    if tampered_percent < 3:
+        return 4
+
+    if tampered_percent < 8:
+        return 6
+
+    if tampered_percent < 15:
+        return 8
+
+    return 10
+
+
+def filter_mvss_regions(
+    tampering_result,
+    preprocessing_result,
+    image_path
+):
+
+    result = {
+        **(tampering_result or {})
+    }
+
+    image = cv2.imread(image_path)
+
+    if image is None:
+        return result
+
+    height, width = image.shape[:2]
+    image_area = float(width * height) if width and height else 1.0
+    removed_regions = preprocessing_result.get(
+        "removed_regions",
+        preprocessing_result.get("qr_regions", [])
+    ) or []
+
+    valid_regions = []
+    suppressed_regions = list(
+        result.get("suppressed_regions", [])
+        or []
+    )
+
+    for region in result.get("suspicious_regions", []) or []:
+
+        w = int(region.get("w", 0))
+        h = int(region.get("h", 0))
+        area = float(
+            region.get("area")
+            or (w * h)
+        )
+        area_ratio = area / image_area
+
+        if area_ratio < 0.0008:
+            suppressed_regions.append({
+                "region": region,
+                "reason": "Region too small for reliable MVSS evidence",
+                "area_ratio": round(area_ratio, 5)
+            })
+            continue
+
+        if area_ratio > 0.20:
+            suppressed_regions.append({
+                "region": region,
+                "reason": "Region covers too much of document for reliable MVSS evidence",
+                "area_ratio": round(area_ratio, 5)
+            })
+            continue
+
+        overlapping_qr = None
+        overlap_score = 0
+
+        for removed_region in removed_regions:
+            iou = _box_iou(
+                region,
+                removed_region
+            )
+
+            if iou > overlap_score:
+                overlap_score = iou
+                overlapping_qr = removed_region
+
+        if overlapping_qr and overlap_score > 0.30:
+            suppressed_regions.append({
+                "region": region,
+                "overlapping_region": overlapping_qr,
+                "iou": round(overlap_score, 3),
+                "reason": "Region overlaps removed QR-like area"
+            })
+            continue
+
+        valid_region = {
+            **region,
+            "area": int(area),
+            "area_ratio": round(area_ratio, 5),
+            "confidence": result.get("mvss_confidence", 0)
+        }
+        valid_regions.append(valid_region)
+
+    valid_regions = sorted(
+        valid_regions,
+        key=lambda item: item.get("area", 0),
+        reverse=True
+    )[:3]
+
+    total_area = sum(
+        region.get("area", 0)
+        for region in valid_regions
+    )
+    tampered_percent = (
+        total_area / image_area
+    ) * 100
+    confidence = float(
+        result.get("mvss_confidence", 0)
+        or 0
+    )
+
+    result["suspicious_regions"] = valid_regions
+    result["suspicious_region_count"] = len(valid_regions)
+    result["valid_suspicious_region_count"] = len(valid_regions)
+    result["suppressed_regions"] = suppressed_regions
+    result["suppressed_region_count"] = len(suppressed_regions)
+    result["tampered_area_percent"] = round(tampered_percent, 2)
+    result["tampering_score"] = float(
+        _mvss_score_from_area(
+            tampered_percent,
+            confidence
+        )
+    )
+    result["tampering_detected"] = len(valid_regions) > 0
+
+    return result
+
+
 def safe_document_condition_analysis(image_path):
 
     try:
@@ -246,36 +412,6 @@ def safe_photo_replacement_analysis(image_path):
         }
 
 
-def safe_ai_generated_analysis(
-    image_path,
-    metadata_result,
-    ocr_result
-):
-
-    try:
-        return analyze_ai_generated_image(
-            image_path,
-            metadata_result,
-            ocr_result
-        )
-
-    except Exception as exc:
-        return {
-            "ai_generated_suspected": False,
-            "strong_ai_generated_signal": False,
-            "printed_document_likely": False,
-            "positive_synthetic_evidence_count": 0,
-            "real_capture_evidence_count": 0,
-            "ai_generation_score": 0,
-            "confidence": 0,
-            "reasons": [],
-            "supporting_reasons": [],
-            "real_capture_reasons": [],
-            "suppressed_reasons": [],
-            "error": f"AI generated image analysis failed: {exc}"
-        }
-
-
 def safe_visual_consistency_analysis(
     image_path,
     region_groups
@@ -293,6 +429,51 @@ def safe_visual_consistency_analysis(
             "inconsistent_regions": [],
             "reasons": [],
             "error": f"Visual consistency analysis failed: {exc}"
+        }
+
+
+def safe_forgery_localization_analysis(image_path):
+
+    try:
+        return analyze_forgery_localization(
+            image_path
+        )
+
+    except Exception as exc:
+        return {
+            "model_available": False,
+            "model": "forgery-localization-unavailable",
+            "manipulation_detected": False,
+            "forgery_score": 0,
+            "confidence": 0,
+            "suspicious_regions": [],
+            "localization_map_path": None,
+            "reasons": [],
+            "model_error": f"Forgery localization failed: {exc}"
+        }
+
+
+def safe_text_consistency_analysis(
+    image_path,
+    ocr_lines,
+    extracted_text
+):
+
+    try:
+        return analyze_text_consistency(
+            image_path,
+            ocr_lines,
+            extracted_text
+        )
+
+    except Exception as exc:
+        return {
+            "font_mismatch_detected": False,
+            "field_mismatch_score": 0,
+            "suspicious_fields": [],
+            "suspicious_regions": [],
+            "reasons": [],
+            "error": f"Text consistency analysis failed: {exc}"
         }
 
 
@@ -316,6 +497,101 @@ def safe_field_extraction(ocr_result):
             "extraction_mode": "strict_label_anchor",
             "error": f"Field extraction failed: {exc}"
         }
+
+
+def dedupe_regions(regions, iou_threshold=0.50):
+
+    selected = []
+
+    for region in regions or []:
+        duplicate = False
+
+        for existing in selected:
+            if _box_iou(region, existing) >= iou_threshold:
+                duplicate = True
+                break
+
+        if not duplicate:
+            selected.append(region)
+
+    return selected
+
+
+def build_visual_manipulation_analysis(
+    tampering_result,
+    forgery_result,
+    text_consistency_result,
+    ela_result
+):
+
+    regions = []
+    reasons = []
+
+    for region in tampering_result.get("suspicious_regions", []) or []:
+        regions.append({
+            **region,
+            "type": "mvss"
+        })
+
+    for region in forgery_result.get("suspicious_regions", []) or []:
+        regions.append({
+            **region,
+            "type": "forgery_model"
+        })
+
+    for region in text_consistency_result.get("suspicious_regions", []) or []:
+        regions.append({
+            **region,
+            "type": "text_consistency"
+        })
+
+    if tampering_result.get("tampering_detected"):
+        reasons.append(
+            "MVSS detected suspicious visual manipulation region"
+        )
+
+    if forgery_result.get("manipulation_detected"):
+        reasons.append(
+            "Forgery localization model detected possible manipulated region"
+        )
+
+    if text_consistency_result.get("font_mismatch_detected"):
+        reasons.append(
+            "Text field style differs from surrounding document text"
+        )
+
+    score = min(
+        100,
+        int(
+            tampering_result.get("tampering_score", 0) * 4
+            + forgery_result.get("forgery_score", 0) * 0.5
+            + text_consistency_result.get("field_mismatch_score", 0) * 0.5
+            + min(len(ela_result.get("suspicious_regions", []) or []) * 3, 10)
+        )
+    )
+
+    return {
+        "visual_manipulation_detected": bool(regions),
+        "visual_manipulation_score": score,
+        "regions": dedupe_regions(regions),
+        "reasons": reasons,
+        "signals": {
+            "mvss": {
+                "tampering_detected": tampering_result.get("tampering_detected", False),
+                "tampering_score": tampering_result.get("tampering_score", 0),
+                "suspicious_region_count": tampering_result.get("suspicious_region_count", 0)
+            },
+            "forgery_model": {
+                "model_available": forgery_result.get("model_available", False),
+                "manipulation_detected": forgery_result.get("manipulation_detected", False),
+                "forgery_score": forgery_result.get("forgery_score", 0)
+            },
+            "text_consistency": {
+                "font_mismatch_detected": text_consistency_result.get("font_mismatch_detected", False),
+                "field_mismatch_score": text_consistency_result.get("field_mismatch_score", 0)
+            }
+        }
+    }
 
 
 @router.post("/upload")
@@ -455,12 +731,6 @@ async def upload_document(
         analysis_image_path
     )
 
-    ai_generated_result = safe_ai_generated_analysis(
-        analysis_image_path,
-        metadata_result,
-        ocr_result
-    )
-
     ela_result = safe_ela_analysis(
         analysis_image_path
     )
@@ -469,20 +739,74 @@ async def upload_document(
         analysis_image_path
     )
 
-    qr_preprocessing_result["input_path"] = response_path(
-        qr_preprocessing_result.get("input_path")
-    )
-    qr_preprocessing_result["output_path"] = response_path(
-        qr_preprocessing_result.get("output_path")
-    )
-
     mvss_image_path = qr_preprocessing_result.get(
-        "output_path",
-        analysis_image_path
+        "preprocessed_image_path",
+        qr_preprocessing_result.get(
+            "output_path",
+            analysis_image_path
+        )
     )
 
     tampering_result = safe_tampering_analysis(
         mvss_image_path
+    )
+
+    tampering_result = filter_mvss_regions(
+        tampering_result,
+        qr_preprocessing_result,
+        analysis_image_path
+    )
+
+    mvss_preprocess_analysis = {
+        "qr_removed": bool(
+            qr_preprocessing_result.get("qr_removed")
+        ),
+        "removed_region_count": int(
+            qr_preprocessing_result.get("removed_region_count", 0)
+        ),
+        "removed_regions": qr_preprocessing_result.get(
+            "removed_regions",
+            qr_preprocessing_result.get("qr_regions", [])
+        ),
+        "preprocessed_image_path": response_path(
+            qr_preprocessing_result.get("preprocessed_image_path")
+        ),
+        "method": qr_preprocessing_result.get(
+            "method",
+            "none"
+        ),
+        "reasons": qr_preprocessing_result.get(
+            "reasons",
+            []
+        )
+    }
+
+    if qr_preprocessing_result.get("error"):
+        mvss_preprocess_analysis["error"] = qr_preprocessing_result["error"]
+
+    preprocessing_analysis = {
+        **mvss_preprocess_analysis,
+        "input_path": response_path(
+            qr_preprocessing_result.get("input_path")
+        ),
+        "output_path": response_path(
+            qr_preprocessing_result.get("output_path")
+        ),
+        "qr_regions": mvss_preprocess_analysis["removed_regions"]
+    }
+
+    tampering_result["analysis_image_path"] = response_path(
+        mvss_image_path
+    )
+
+    forgery_localization_result = safe_forgery_localization_analysis(
+        analysis_image_path
+    )
+
+    text_consistency_result = safe_text_consistency_analysis(
+        analysis_image_path,
+        ocr_result.get("lines", []),
+        ocr_result.get("text", "")
     )
 
     visual_consistency_result = safe_visual_consistency_analysis(
@@ -503,8 +827,23 @@ async def upload_document(
             "photo": photo_replacement_result.get(
                 "photo_regions",
                 []
+            ),
+            "forgery_model": forgery_localization_result.get(
+                "suspicious_regions",
+                []
+            ),
+            "text_consistency": text_consistency_result.get(
+                "suspicious_regions",
+                []
             )
         }
+    )
+
+    visual_manipulation_result = build_visual_manipulation_analysis(
+        tampering_result,
+        forgery_localization_result,
+        text_consistency_result,
+        ela_result
     )
 
     correlation_result = correlate(
@@ -541,7 +880,9 @@ async def upload_document(
 
         photo_replacement_result=photo_replacement_result,
 
-        ai_generated_result=ai_generated_result,
+        forgery_localization_result=forgery_localization_result,
+
+        text_consistency_result=text_consistency_result,
 
         visual_consistency_result=visual_consistency_result
 
@@ -576,6 +917,16 @@ async def upload_document(
             []
         )
 
+        forgery_regions = forgery_localization_result.get(
+            "suspicious_regions",
+            []
+        )
+
+        text_regions = text_consistency_result.get(
+            "suspicious_regions",
+            []
+        )
+
         for region in mvss_regions:
             region["type"] = "mvss"
 
@@ -591,11 +942,19 @@ async def upload_document(
         for region in visual_regions:
             region["type"] = "visual"
 
+        for region in forgery_regions:
+            region["type"] = "forgery_model"
+
+        for region in text_regions:
+            region["type"] = "text_consistency"
+
         combined_regions = (
             (mvss_regions or [])
             + (ela_regions or [])
             + (condition_regions or [])
             + (photo_regions or [])
+            + (forgery_regions or [])
+            + (text_regions or [])
             + (visual_regions or [])
         )
 
@@ -642,14 +1001,23 @@ async def upload_document(
         "photo_replacement_analysis":
             photo_replacement_result,
 
-        "ai_generated_analysis":
-            ai_generated_result,
+        "forgery_localization_analysis":
+            forgery_localization_result,
+
+        "text_consistency_analysis":
+            text_consistency_result,
 
         "visual_consistency_analysis":
             visual_consistency_result,
 
+        "visual_manipulation_analysis":
+            visual_manipulation_result,
+
         "preprocessing_analysis":
-            qr_preprocessing_result,
+            preprocessing_analysis,
+
+        "mvss_preprocess_analysis":
+            mvss_preprocess_analysis,
 
         "suspicious_fields":
             correlation_result.get(

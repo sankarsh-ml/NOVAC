@@ -144,12 +144,16 @@ class TamperingService:
             1000,
             image_area * 0.001
         )
+        MAX_AREA = image_area * 0.20
 
         for cnt in contours:
 
             area = cv2.contourArea(cnt)
 
             if area < MIN_AREA:
+                continue
+
+            if area > MAX_AREA:
                 continue
 
             x, y, w, h = cv2.boundingRect(cnt)
@@ -159,7 +163,9 @@ class TamperingService:
                 "y": int(y),
                 "w": int(w),
                 "h": int(h),
-                "area": int(area)
+                "area": int(area),
+                "area_ratio": round(area / float(image_area or 1), 5),
+                "confidence": float(confidence)
             })
 
             total_area += area

@@ -4,24 +4,28 @@ import numpy as np
 
 def _entropy(values):
 
+    values = values.astype("uint8").flatten()
+
     histogram, _ = np.histogram(
         values,
         bins=32,
-        range=(0, 255),
-        density=True
+        range=(0, 256)
     )
 
-    histogram = histogram[
-        histogram > 0
-    ]
+    total = np.sum(histogram)
 
-    if histogram.size == 0:
+    if total <= 0:
         return 0.0
+
+    probability = histogram / total
+    probability = probability[
+        probability > 0
+    ]
 
     return float(
         -np.sum(
-            histogram
-            * np.log2(histogram)
+            probability
+            * np.log2(probability)
         )
     )
 
@@ -29,6 +33,7 @@ def _entropy(values):
 def _tile_uniformity(gray):
 
     height, width = gray.shape[:2]
+
     tile_size = max(
         min(height, width) // 6,
         24
@@ -37,7 +42,9 @@ def _tile_uniformity(gray):
     std_values = []
 
     for y in range(0, height - tile_size + 1, tile_size):
+
         for x in range(0, width - tile_size + 1, tile_size):
+
             tile = gray[
                 y:y + tile_size,
                 x:x + tile_size
@@ -71,13 +78,43 @@ def _text_edge_stats(gray, ocr_lines):
         if not bbox or len(bbox) != 4:
             continue
 
-        xs = [point[0] for point in bbox]
-        ys = [point[1] for point in bbox]
+        xs = [
+            point[0]
+            for point in bbox
+        ]
 
-        x = int(max(0, min(xs)))
-        y = int(max(0, min(ys)))
-        w = int(min(width - x, max(xs) - min(xs)))
-        h = int(min(height - y, max(ys) - min(ys)))
+        ys = [
+            point[1]
+            for point in bbox
+        ]
+
+        x = int(
+            max(
+                0,
+                min(xs)
+            )
+        )
+
+        y = int(
+            max(
+                0,
+                min(ys)
+            )
+        )
+
+        w = int(
+            min(
+                width - x,
+                max(xs) - min(xs)
+            )
+        )
+
+        h = int(
+            min(
+                height - y,
+                max(ys) - min(ys)
+            )
+        )
 
         if w <= 0 or h <= 0:
             continue
@@ -109,6 +146,7 @@ def _text_edge_stats(gray, ocr_lines):
 def _patch_repetition_score(gray):
 
     height, width = gray.shape[:2]
+
     patch_size = max(
         min(height, width) // 8,
         24
@@ -117,7 +155,9 @@ def _patch_repetition_score(gray):
     descriptors = []
 
     for y in range(0, height - patch_size + 1, patch_size):
+
         for x in range(0, width - patch_size + 1, patch_size):
+
             patch = gray[
                 y:y + patch_size,
                 x:x + patch_size
@@ -133,10 +173,12 @@ def _patch_repetition_score(gray):
                 [16],
                 [0, 256]
             )
+
             hist = cv2.normalize(
                 hist,
                 hist
             ).flatten()
+
             descriptors.append(hist)
 
     if len(descriptors) < 6:
@@ -146,12 +188,15 @@ def _patch_repetition_score(gray):
     comparisons = 0
 
     for i in range(len(descriptors)):
+
         for j in range(i + 1, len(descriptors)):
+
             similarity = cv2.compareHist(
                 descriptors[i].astype("float32"),
                 descriptors[j].astype("float32"),
                 cv2.HISTCMP_CORREL
             )
+
             comparisons += 1
 
             if similarity > 0.96:
@@ -166,21 +211,27 @@ def _patch_repetition_score(gray):
 def _real_capture_evidence(image, gray):
 
     height, width = gray.shape[:2]
+
     image_area = float(width * height) if width and height else 1.0
+
     reasons = []
 
     tile_size = max(
         min(height, width) // 5,
         32
     )
+
     tile_means = []
 
     for y in range(0, height - tile_size + 1, tile_size):
+
         for x in range(0, width - tile_size + 1, tile_size):
+
             tile = gray[
                 y:y + tile_size,
                 x:x + tile_size
             ]
+
             if tile.size:
                 tile_means.append(
                     float(np.mean(tile))
@@ -196,6 +247,7 @@ def _real_capture_evidence(image, gray):
         (3, 3),
         0
     )
+
     residual = cv2.absdiff(
         gray,
         blur
@@ -225,17 +277,22 @@ def _real_capture_evidence(image, gray):
     ]
 
     if large_contours:
+
         largest = max(
             large_contours,
             key=cv2.contourArea
         )
+
         x, y, w, h = cv2.boundingRect(
             largest
         )
+
         contour_area = cv2.contourArea(
             largest
         )
+
         frame_ratio = (w * h) / image_area
+
         extent = contour_area / float(w * h or 1)
 
         if frame_ratio < 0.88:
@@ -252,7 +309,9 @@ def _real_capture_evidence(image, gray):
         image,
         cv2.COLOR_BGR2HSV
     )
+
     value = hsv[:, :, 2]
+
     bright_ratio = float(
         np.mean(value > 242)
     )
@@ -263,6 +322,42 @@ def _real_capture_evidence(image, gray):
         )
 
     return reasons[:5]
+
+
+def _hard_physical_capture_reasons(real_capture_reasons):
+
+    hard_reasons = []
+
+    markers = [
+        "visible background",
+        "perspective",
+        "physical document boundary",
+        "localized glare",
+        "laminated reflection",
+        "capture shadows",
+        "camera",
+        "scan noise"
+    ]
+
+    for reason in real_capture_reasons:
+
+        reason_lower = reason.lower()
+
+        if any(marker in reason_lower for marker in markers):
+            hard_reasons.append(reason)
+
+    return hard_reasons
+
+
+def _risk_label(score):
+
+    if score >= 65:
+        return "high"
+
+    if score >= 40:
+        return "medium"
+
+    return "low"
 
 
 def analyze_ai_generated_image(
@@ -278,11 +373,16 @@ def analyze_ai_generated_image(
             "ai_generated_suspected": False,
             "strong_ai_generated_signal": False,
             "printed_document_likely": False,
+            "synthetic_clean_document_signal": False,
+            "synthetic_risk": "low",
             "positive_synthetic_evidence_count": 0,
+            "real_capture_evidence_count": 0,
+            "hard_physical_capture_count": 0,
             "ai_generation_score": 0,
             "confidence": 0,
             "reasons": [],
             "supporting_reasons": [],
+            "real_capture_reasons": [],
             "suppressed_reasons": [],
             "error": f"Cannot read image: {image_path}"
         }
@@ -346,12 +446,14 @@ def analyze_ai_generated_image(
     )
 
     metadata_result = metadata_result or {}
+
     metadata = metadata_result.get(
         "metadata",
         {}
     )
 
     ocr_result = ocr_result or {}
+
     ocr_lines = ocr_result.get(
         "lines",
         []
@@ -376,11 +478,25 @@ def analyze_ai_generated_image(
         real_capture_reasons
     )
 
+    hard_capture_reasons = _hard_physical_capture_reasons(
+        real_capture_reasons
+    )
+
+    hard_physical_capture_count = len(
+        hard_capture_reasons
+    )
+
     supporting_score = 0
     positive_score = 0
+
     supporting_reasons = []
     positive_reasons = []
     suppressed_reasons = []
+
+    # -----------------------------
+    # Supporting weak signals
+    # These are not enough alone.
+    # -----------------------------
 
     if noise_std < 2.5:
         supporting_score += 4
@@ -400,8 +516,9 @@ def analyze_ai_generated_image(
             "Readable OCR with weak visual edges"
         )
 
+    # Missing metadata is common after uploads/compression.
+    # Keep as context only. Do not increase score.
     if not metadata:
-        supporting_score += 3
         supporting_reasons.append(
             "No image metadata available"
         )
@@ -411,6 +528,10 @@ def analyze_ai_generated_image(
         for value in metadata.values()
     )
 
+    # -----------------------------
+    # Strong positive synthetic clues
+    # -----------------------------
+
     if any(
         marker in software
         for marker in [
@@ -418,7 +539,9 @@ def analyze_ai_generated_image(
             "midjourney",
             "stable diffusion",
             "dall",
-            "canva"
+            "canva",
+            "firefly",
+            "flux"
         ]
     ):
         positive_score += 35
@@ -463,12 +586,44 @@ def analyze_ai_generated_image(
             "Overly uniform synthetic-looking surface with clean edges"
         )
 
+    # -----------------------------
+    # Clean digital/generated document signal
+    # This does NOT depend heavily on OCR lines,
+    # because OCR may fail or may not pass lines correctly.
+    # -----------------------------
+
+    clean_generated_surface_signal = (
+        not metadata
+        and texture_entropy < 1.75
+        and noise_std < 4.5
+        and tile_uniformity < 10.0
+        and hard_physical_capture_count == 0
+    )
+
+    clean_digital_document_signal = (
+        sharpness > 120
+        and edge_density > 0.025
+        and noise_std < 5.0
+        and texture_entropy < 2.0
+        and hard_physical_capture_count == 0
+    )
+
+    synthetic_clean_document_signal = (
+        clean_generated_surface_signal
+        or clean_digital_document_signal
+    )
+
+    if synthetic_clean_document_signal:
+        positive_score += 45
+        positive_reasons.append(
+            "Clean digital document surface without real camera or scan evidence"
+        )
+
     if (
         real_capture_evidence_count == 0
-        and len(ocr_lines) >= 3
         and not metadata
         and texture_entropy < 1.75
-        and tile_uniformity < 7.0
+        and tile_uniformity < 8.0
         and noise_std < 5.0
     ):
         positive_score += 18
@@ -476,27 +631,40 @@ def analyze_ai_generated_image(
             "Clean document surface lacks real camera or scan artifacts"
         )
 
+    # -----------------------------
+    # Suppression logic
+    # Important:
+    # readable OCR alone must NOT suppress AI detection.
+    # Only hard physical capture evidence should suppress.
+    # -----------------------------
+
     printed_document_likely = (
         len(ocr_lines) >= 3
         and avg_confidence >= 0.80
         and len(positive_reasons) == 0
-        and real_capture_evidence_count >= 2
+        and hard_physical_capture_count >= 2
+        and not synthetic_clean_document_signal
     )
 
     if printed_document_likely:
+
         suppressed_reasons.extend([
             "Stable OCR text structure",
             "No positive synthetic artifacts detected"
         ])
 
         suppressed_reasons.extend(
-            real_capture_reasons[:3]
+            hard_capture_reasons[:3]
         )
 
         if noise_std < 4 or texture_entropy < 1.6:
             suppressed_reasons.append(
                 "Flat printed or laminated document surface"
             )
+
+    # -----------------------------
+    # Final score
+    # -----------------------------
 
     score = positive_score
 
@@ -520,34 +688,34 @@ def analyze_ai_generated_image(
         positive_reasons
     )
 
+    synthetic_risk = _risk_label(
+        score
+    )
+
     ai_generated_suspected = (
-        score >= 25
+        score >= 40
         and positive_count >= 1
+        and not printed_document_likely
     )
 
     strong_ai_generated_signal = (
-        positive_count >= 2
-        or score >= 45
-        or (
-            score >= 28
-            and real_capture_evidence_count == 0
-            and any(
-                "lacks real camera" in reason.lower()
-                for reason in positive_reasons
-            )
-        )
-        or any(
-            "generative" in reason.lower()
-            for reason in positive_reasons
-        )
+        score >= 65
+        and positive_count >= 2
+        and hard_physical_capture_count == 0
+    ) or any(
+        "generative" in reason.lower()
+        for reason in positive_reasons
     )
 
     return {
         "ai_generated_suspected": ai_generated_suspected,
         "strong_ai_generated_signal": strong_ai_generated_signal,
         "printed_document_likely": printed_document_likely,
+        "synthetic_clean_document_signal": synthetic_clean_document_signal,
+        "synthetic_risk": synthetic_risk,
         "positive_synthetic_evidence_count": positive_count,
         "real_capture_evidence_count": real_capture_evidence_count,
+        "hard_physical_capture_count": hard_physical_capture_count,
         "ai_generation_score": score,
         "confidence": round(score / 100, 2),
         "statistics": {
@@ -559,7 +727,9 @@ def analyze_ai_generated_image(
             "tile_uniformity": round(tile_uniformity, 2),
             "patch_repetition": round(patch_repetition, 3),
             "text_edge_density": round(text_edge_density, 4),
-            "text_edge_variance": round(text_edge_variance, 4)
+            "text_edge_variance": round(text_edge_variance, 4),
+            "clean_generated_surface_signal": clean_generated_surface_signal,
+            "clean_digital_document_signal": clean_digital_document_signal
         },
         "reasons": positive_reasons[:8],
         "supporting_reasons": supporting_reasons[:8],

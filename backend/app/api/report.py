@@ -383,10 +383,14 @@ def generate_report(case_id: str):
     masking_analysis = result.get("masking_analysis", {})
     condition_analysis = result.get("document_condition_analysis", {})
     photo_analysis = result.get("photo_replacement_analysis", {})
-    ai_analysis = result.get("ai_generated_analysis", {})
+    forgery_analysis = result.get("forgery_localization_analysis", {})
+    text_consistency_analysis = result.get("text_consistency_analysis", {})
     consistency_analysis = result.get("visual_consistency_analysis", {})
     field_analysis = result.get("field_extraction_analysis", {})
-    preprocessing_analysis = result.get("preprocessing_analysis", {})
+    preprocessing_analysis = (
+        result.get("mvss_preprocess_analysis", {})
+        or result.get("preprocessing_analysis", {})
+    )
 
     fraud_score = fraud_analysis.get("fraud_score", 0)
     risk_level = fraud_analysis.get("risk_level", "Unknown")
@@ -403,7 +407,7 @@ def generate_report(case_id: str):
 
     content.append(
         Paragraph(
-            "AI-powered document integrity, tampering, and visual consistency review",
+            "Document integrity, tampering, and visual consistency review",
             styles["NovacSubtitle"]
         )
     )
@@ -581,11 +585,12 @@ def generate_report(case_id: str):
         ["Metadata", f"Risk {_score(metadata_analysis.get('risk_score', 0))}", ", ".join(metadata_analysis.get("flags", [])) or "No metadata flags"],
         ["OCR / Masking", f"Confidence {_safe(result.get('avg_confidence', 'N/A'))}", "Masked fields detected" if masking_analysis.get("masking_detected") else "No masked fields detected"],
         ["ELA", f"Score {_score(ela_analysis.get('ela_score', 0))}", f"{len(ela_analysis.get('suspicious_regions', []))} suspicious region(s)"],
-        ["MVSS", f"Score {_score(tampering_analysis.get('tampering_score', 0))}", f"{tampering_analysis.get('tampered_area_percent', 0)}% suspicious area"],
-        ["MVSS Preprocess", preprocessing_analysis.get("method", "none"), f"{len(preprocessing_analysis.get('qr_regions', []))} QR-like region(s) removed" if preprocessing_analysis.get("qr_removed") else "No QR region removed before MVSS"],
+        ["Visual Tampering / MVSS", f"Score {_score(tampering_analysis.get('tampering_score', 0))}", f"{tampering_analysis.get('valid_suspicious_region_count', tampering_analysis.get('suspicious_region_count', 0))} valid region(s), {tampering_analysis.get('suppressed_region_count', 0)} suppressed"],
+        ["MVSS Preprocess", preprocessing_analysis.get("method", "none"), f"{preprocessing_analysis.get('removed_region_count', len(preprocessing_analysis.get('removed_regions', preprocessing_analysis.get('qr_regions', []))))} QR-like region(s) removed" if preprocessing_analysis.get("qr_removed") else "No QR region removed before MVSS"],
         ["Physical Condition", f"Score {_score(condition_analysis.get('condition_score', 0))}", f"Confidence: {condition_analysis.get('condition_confidence', 'low')}. " + ("; ".join(condition_analysis.get("reasons", [])[:2]) or "No major fold/tear indicators")],
-        ["Photo Replacement", f"Score {_score(photo_analysis.get('replacement_score', 0))}", ("AI-generated photo suspected; " if photo_analysis.get("ai_photo_suspected") else "") + ("Printed photo likely; " if photo_analysis.get("printed_photo_likely") else "") + ("; ".join(photo_analysis.get("reasons", [])[:2]) or "No photo replacement indicators")],
-        ["AI Generated", f"Score {_score(ai_analysis.get('ai_generation_score', 0))}", ("Strong AI signal; " if ai_analysis.get("strong_ai_generated_signal") else "") + ("Printed document likely; " if ai_analysis.get("printed_document_likely") else "") + ("; ".join((ai_analysis.get("reasons") or ai_analysis.get("supporting_reasons") or ai_analysis.get("suppressed_reasons") or [])[:2]) or "No strong AI-generation indicators")],
+        ["Photo Replacement", f"Score {_score(photo_analysis.get('replacement_score', 0))}", ("Synthetic photo suspected; " if photo_analysis.get("ai_photo_suspected") else "") + ("Printed photo likely; " if photo_analysis.get("printed_photo_likely") else "") + ("; ".join(photo_analysis.get("reasons", [])[:2]) or "No photo replacement indicators")],
+        ["Forgery Localization", f"Score {_score(forgery_analysis.get('forgery_score', 0))}", "Forgery localization model unavailable" if forgery_analysis.get("model_available") is False else ("Possible manipulated region detected" if forgery_analysis.get("manipulation_detected") else "No strong forgery localization signal")],
+        ["Field Text Consistency", f"Score {_score(text_consistency_analysis.get('field_mismatch_score', 0))}", ("; ".join(text_consistency_analysis.get("reasons", [])[:2]) if text_consistency_analysis.get("font_mismatch_detected") else "No strong field-level text mismatch detected")],
         ["Visual Consistency", f"Score {_score(consistency_analysis.get('consistency_score', 0))}", "; ".join(consistency_analysis.get("reasons", [])[:2]) or "No major region inconsistency"],
         ["Correlation", f"{correlation_analysis.get('suspicious_field_count', 0)} field(s)", "OCR fields overlapping visual evidence" if correlation_analysis.get("suspicious_field_count", 0) else "No suspicious OCR-field overlap"],
     ]
@@ -745,7 +750,7 @@ def generate_report(case_id: str):
 
         verdict = (
             "Critical risk: multiple document integrity signals indicate a "
-            "high probability of tampering or synthetic manipulation. Manual "
+            "high probability of tampering or digital manipulation. Manual "
             "verification is strongly recommended."
         )
 

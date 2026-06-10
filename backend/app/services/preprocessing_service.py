@@ -67,7 +67,7 @@ def _fill_region(image, points):
     pts = np.array(
         points,
         dtype=np.int32
-    )
+    ).reshape(-1, 2)
 
     x, y, w, h = cv2.boundingRect(pts)
     pad = max(
@@ -94,6 +94,50 @@ def _fill_region(image, points):
         "w": int(max(x2 - x1, 0)),
         "h": int(max(y2 - y1, 0))
     }
+
+
+def _overlap_ratio(region, other):
+
+    x1 = max(region["x"], other["x"])
+    y1 = max(region["y"], other["y"])
+    x2 = min(region["x"] + region["w"], other["x"] + other["w"])
+    y2 = min(region["y"] + region["h"], other["y"] + other["h"])
+
+    intersection = max(0, x2 - x1) * max(0, y2 - y1)
+    smaller = min(
+        region["w"] * region["h"],
+        other["w"] * other["h"]
+    )
+
+    if smaller <= 0:
+        return 0
+
+    return intersection / float(smaller)
+
+
+def _is_probable_photo_region(image, region):
+
+    x = region["x"]
+    y = region["y"]
+    w = region["w"]
+    h = region["h"]
+
+    roi = image[
+        y:y + h,
+        x:x + w
+    ]
+
+    if roi.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(
+        roi,
+        cv2.COLOR_BGR2HSV
+    )
+
+    saturation = hsv[:, :, 1]
+
+    return float(np.mean(saturation > 45)) > 0.35
 
 
 def _qr_like_regions(image):
@@ -140,12 +184,27 @@ def _qr_like_regions(image):
         x, y, w, h = cv2.boundingRect(contour)
         area = w * h
 
-        if area < image_area * 0.004 or area > image_area * 0.20:
+        area_ratio = area / image_area
+
+        if area_ratio < 0.005 or area_ratio > 0.15:
             continue
 
         aspect = w / float(h or 1)
 
-        if aspect < 0.72 or aspect > 1.28:
+        if aspect < 0.65 or aspect > 1.45:
+            continue
+
+        if min(w, h) < max(28, int(min(width, height) * 0.045)):
+            continue
+
+        candidate = {
+            "x": int(x),
+            "y": int(y),
+            "w": int(w),
+            "h": int(h)
+        }
+
+        if _is_probable_photo_region(image, candidate):
             continue
 
         roi = gray[
@@ -164,6 +223,30 @@ def _qr_like_regions(image):
         edge_density = float(
             np.mean(edges > 0)
         )
+
+        small = cv2.resize(
+            roi,
+            (48, 48),
+            interpolation=cv2.INTER_AREA
+        )
+
+        _, small_binary = cv2.threshold(
+            small,
+            0,
+            255,
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+
+        horizontal_transitions = np.mean(
+            small_binary[:, 1:] != small_binary[:, :-1]
+        )
+        vertical_transitions = np.mean(
+            small_binary[1:, :] != small_binary[:-1, :]
+        )
+        transition_density = float(
+            (horizontal_transitions + vertical_transitions) / 2
+        )
+
         contrast = float(
             np.std(roi)
         )
@@ -175,7 +258,8 @@ def _qr_like_regions(image):
         )
 
         if (
-            edge_density < 0.10
+            edge_density < 0.08
+            or transition_density < 0.12
             or contrast < 38
             or dark_ratio < 0.12
             or bright_ratio < 0.18
@@ -188,6 +272,7 @@ def _qr_like_regions(image):
             "w": int(w),
             "h": int(h),
             "edge_density": round(edge_density, 3),
+            "transition_density": round(transition_density, 3),
             "contrast": round(contrast, 2)
         })
 
@@ -203,17 +288,7 @@ def _qr_like_regions(image):
         overlaps = False
 
         for existing in selected:
-            x1 = max(region["x"], existing["x"])
-            y1 = max(region["y"], existing["y"])
-            x2 = min(region["x"] + region["w"], existing["x"] + existing["w"])
-            y2 = min(region["y"] + region["h"], existing["y"] + existing["h"])
-            overlap_area = max(0, x2 - x1) * max(0, y2 - y1)
-            smaller = min(
-                region["w"] * region["h"],
-                existing["w"] * existing["h"]
-            )
-
-            if smaller and overlap_area / smaller > 0.45:
+            if _overlap_ratio(region, existing) > 0.45:
                 overlaps = True
                 break
 
@@ -234,9 +309,13 @@ def remove_qr_code_with_metadata(image_path):
         return {
             "input_path": image_path,
             "output_path": image_path,
+            "preprocessed_image_path": image_path,
             "qr_removed": False,
             "qr_regions": [],
+            "removed_regions": [],
+            "removed_region_count": 0,
             "method": "error",
+            "reasons": [],
             "error": f"Cannot read image: {image_path}"
         }
 
@@ -301,9 +380,15 @@ def remove_qr_code_with_metadata(image_path):
         return {
             "input_path": image_path,
             "output_path": image_path,
+            "preprocessed_image_path": image_path,
             "qr_removed": False,
             "qr_regions": [],
-            "method": "none"
+            "removed_regions": [],
+            "removed_region_count": 0,
+            "method": "none",
+            "reasons": [
+                "No QR or QR-like dense square region detected"
+            ]
         }
 
     base, ext = os.path.splitext(
@@ -320,9 +405,15 @@ def remove_qr_code_with_metadata(image_path):
     return {
         "input_path": image_path,
         "output_path": output_path,
+        "preprocessed_image_path": output_path,
         "qr_removed": True,
         "qr_regions": removed_regions,
-        "method": method
+        "removed_regions": removed_regions,
+        "removed_region_count": len(removed_regions),
+        "method": method,
+        "reasons": [
+            "QR-like region removed before MVSS"
+        ]
     }
 
 
