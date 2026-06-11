@@ -10,6 +10,12 @@ backend/.venv/
 backend/env/
 backend/mvss_venv/
 backend/.mvss_venv/
+backend/model_venvs/
+backend/models/forgery/TruFor/
+backend/models/forgery/checkpoints/
+backend/models/forgery/**/*.pth
+backend/models/forgery/**/*.pth.tar
+backend/models/forgery/**/*.zip
 
 # Python cache
 __pycache__/

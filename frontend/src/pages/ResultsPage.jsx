@@ -37,10 +37,24 @@ function ResultsPage() {
   };
 
   const imageUrl = (path) =>
-    `http://localhost:8000/${path.replace(/\\/g, "/")}`;
+    path ? `http://localhost:8000/${path.replace(/\\/g, "/")}` : "";
 
   const metric = (value, fallback = 0) =>
     value ?? fallback;
+
+  const normalizeScore = (value) => {
+    const numeric = Number(value ?? 0);
+
+    if (!Number.isFinite(numeric)) {
+      return 0;
+    }
+
+    if (numeric >= 0 && numeric <= 1) {
+      return Math.round(numeric * 100);
+    }
+
+    return Math.max(0, Math.min(100, Math.round(numeric)));
+  };
 
   const DetectorCard = ({
     title,
@@ -95,6 +109,9 @@ function ResultsPage() {
   const components =
     result?.fraud_analysis?.components ?? {};
 
+  const contributions =
+    result?.fraud_analysis?.detector_contributions ?? {};
+
   const escalations =
     result?.fraud_analysis?.escalations ?? [];
 
@@ -109,6 +126,9 @@ function ResultsPage() {
 
   const visual =
     result?.visual_consistency_analysis ?? {};
+
+  const quality =
+    result?.document_quality_analysis ?? {};
 
   const forgery =
     result?.forgery_localization_analysis ?? {};
@@ -169,6 +189,15 @@ function ResultsPage() {
             </div>
           </div>
         </div>
+
+        {quality.rejection_recommended && (
+          <div className="reliability-banner">
+            <h2>Analysis reliability low - please upload a clearer document.</h2>
+            <p>
+              Document appears too worn, blurred, or damaged for reliable automated verification.
+            </p>
+          </div>
+        )}
 
         <div className="gauge-card">
           <h2>Fraud Probability</h2>
@@ -295,6 +324,30 @@ function ResultsPage() {
 
           <div className="detector-grid">
             <DetectorCard
+              title="Document Quality"
+              score={metric(quality.quality_score, "N/A")}
+              status={
+                quality.rejection_recommended
+                  ? "Analysis unreliable - rescan recommended"
+                  : "Document quality is acceptable for automated analysis"
+              }
+              reasons={quality.reasons}
+            />
+
+            {Number(contributions.detector_agreement?.contribution ?? 0) > 0 && (
+              <DetectorCard
+                title="Detector Agreement"
+                score={metric(contributions.detector_agreement?.contribution)}
+                status="Independent visual detectors agree on possible manipulation"
+                reasons={
+                  contributions.detector_agreement?.reason
+                    ? [contributions.detector_agreement.reason]
+                    : []
+                }
+              />
+            )}
+
+            <DetectorCard
               title="Physical Condition"
               score={metric(condition.condition_score)}
               status={
@@ -310,11 +363,9 @@ function ResultsPage() {
               score={metric(photo.replacement_score)}
               status={
                 photo.photo_replacement_detected
-                  ? photo.ai_photo_suspected
-                    ? "Synthetic photo/portrait signal suspected"
-                    : "Possible replaced photo/image region"
+                  ? "Possible photo/image region integrity signal"
                   : photo.printed_photo_likely
-                  ? "Printed photo likely; photo signal suppressed"
+                  ? "Photo signal suppressed for this run"
                   : "No strong photo replacement signal"
               }
               reasons={
@@ -328,13 +379,16 @@ function ResultsPage() {
 
             <DetectorCard
               title="Forgery Localization"
-              score={metric(forgery.forgery_score)}
+              score={normalizeScore(forgery.forgery_score)}
               status={
                 forgery.model_available === false
-                  ? "Forgery localization model unavailable"
+                  ? "TruFor unavailable during this run"
+                  : contributions.trufor?.contribution === 0
+                    && (forgery.suspicious_regions?.length ?? 0) > 0
+                  ? "TruFor detected a region, but it overlapped normal/damaged document structure and was downweighted"
                   : forgery.manipulation_detected
-                  ? "Forgery localization model detected possible manipulated region"
-                  : "No strong forgery localization signal"
+                  ? "TruFor detected possible forged/manipulated image regions"
+                  : "No strong TruFor forgery localization signal"
               }
               reasons={
                 forgery.model_error
@@ -348,8 +402,8 @@ function ResultsPage() {
               score={metric(textConsistency.field_mismatch_score)}
               status={
                 textConsistency.font_mismatch_detected
-                  ? "Possible edited text field style mismatch detected"
-                  : "No strong field-level text mismatch detected"
+                  ? "Possible local field text style mismatch detected"
+                  : "No strong local field-level text mismatch detected"
               }
               reasons={
                 textConsistency.error
@@ -389,9 +443,13 @@ function ResultsPage() {
             />
 
             <DetectorCard
-              title="ELA"
+              title="ELA / Compression Consistency"
               score={metric(ela.ela_score)}
-              status={`${ela.suspicious_regions?.length ?? 0} suspicious region(s)`}
+              status={
+                (ela.suspicious_regions?.length ?? 0) > 0
+                  ? "Supporting compression inconsistency signal"
+                  : "No strong compression consistency signal"
+              }
               reasons={
                 ela.error
                   ? [ela.error]
@@ -404,14 +462,19 @@ function ResultsPage() {
               score={metric(tampering.tampering_score)}
               status={
                 tampering.tampering_detected
-                  ? "MVSS detected suspicious visual manipulation regions"
-                  : "No strong visual tampering signal"
+                  && (tampering.scoring_region_count ?? tampering.suspicious_region_count ?? 0) > 0
+                  ? "MVSS detected scoring-eligible suspicious visual manipulation regions"
+                  : tampering.raw_region_count > 0
+                  ? "Raw MVSS regions were suppressed as small/noisy/normal/damage regions"
+                  : "No scoring-eligible MVSS tampering region"
               }
               reasons={
                 tampering.error
                   ? [tampering.error]
+                  : tampering.reasons?.length
+                  ? tampering.reasons
                   : tampering.suppressed_regions?.length
-                  ? tampering.suppressed_regions.map((region) => region.reason)
+                  ? ["Small/noisy MVSS regions were suppressed"]
                   : []
               }
             />

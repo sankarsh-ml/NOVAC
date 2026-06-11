@@ -65,7 +65,9 @@ def _risk_color(risk_level):
         "Low": colors.HexColor("#16a34a"),
         "Medium": colors.HexColor("#ca8a04"),
         "High": colors.HexColor("#ea580c"),
-        "Critical": colors.HexColor("#dc2626")
+        "Critical": colors.HexColor("#dc2626"),
+        "Unreliable Scan": colors.HexColor("#f59e0b"),
+        "Rescan Required": colors.HexColor("#f59e0b")
     }.get(
         risk_level,
         colors.HexColor("#64748b")
@@ -386,6 +388,7 @@ def generate_report(case_id: str):
     forgery_analysis = result.get("forgery_localization_analysis", {})
     text_consistency_analysis = result.get("text_consistency_analysis", {})
     consistency_analysis = result.get("visual_consistency_analysis", {})
+    quality_analysis = result.get("document_quality_analysis", {})
     field_analysis = result.get("field_extraction_analysis", {})
     preprocessing_analysis = (
         result.get("mvss_preprocess_analysis", {})
@@ -396,6 +399,7 @@ def generate_report(case_id: str):
     risk_level = fraud_analysis.get("risk_level", "Unknown")
     reasons = fraud_analysis.get("reasons", [])
     components = fraud_analysis.get("components", {})
+    detector_contributions = fraud_analysis.get("detector_contributions", {})
     escalations = fraud_analysis.get("escalations", [])
 
     content.append(
@@ -471,6 +475,17 @@ def generate_report(case_id: str):
         )
     )
 
+    if quality_analysis.get("rejection_recommended"):
+        content.append(
+            Spacer(1, 8)
+        )
+        content.append(
+            Paragraph(
+                "<b>Analysis unreliable due to document condition. Rescan recommended.</b>",
+                styles["NovacBody"]
+            )
+        )
+
     if escalations:
         _section(
             content,
@@ -507,6 +522,34 @@ def generate_report(case_id: str):
             col_widths=[300, 120]
         )
     )
+
+    if detector_contributions:
+        _section(
+            content,
+            "Detector Contributions",
+            styles
+        )
+
+        contribution_rows = [
+            ["Detector", "Contribution", "Reason"]
+        ]
+
+        for key, item in detector_contributions.items():
+            contribution_rows.append([
+                key.replace("_", " ").title(),
+                _score(item.get("contribution", 0)),
+                Paragraph(
+                    _safe(item.get("reason", "")),
+                    styles["NovacBody"]
+                )
+            ])
+
+        content.append(
+            _table(
+                contribution_rows,
+                col_widths=[130, 90, 280]
+            )
+        )
 
     content.append(PageBreak())
 
@@ -584,13 +627,14 @@ def generate_report(case_id: str):
         ["Detector", "Primary Metric", "Result"],
         ["Metadata", f"Risk {_score(metadata_analysis.get('risk_score', 0))}", ", ".join(metadata_analysis.get("flags", [])) or "No metadata flags"],
         ["OCR / Masking", f"Confidence {_safe(result.get('avg_confidence', 'N/A'))}", "Masked fields detected" if masking_analysis.get("masking_detected") else "No masked fields detected"],
-        ["ELA", f"Score {_score(ela_analysis.get('ela_score', 0))}", f"{len(ela_analysis.get('suspicious_regions', []))} suspicious region(s)"],
-        ["Visual Tampering / MVSS", f"Score {_score(tampering_analysis.get('tampering_score', 0))}", f"{tampering_analysis.get('valid_suspicious_region_count', tampering_analysis.get('suspicious_region_count', 0))} valid region(s), {tampering_analysis.get('suppressed_region_count', 0)} suppressed"],
+        ["TruFor Forgery Localization", f"Score {_score(forgery_analysis.get('forgery_score', 0))}", "TruFor unavailable during this run" if forgery_analysis.get("model_available") is False else ("TruFor detected possible forged/manipulated image regions" if forgery_analysis.get("manipulation_detected") else "No strong TruFor forgery localization signal")],
+        ["Visual Tampering / MVSS", f"Score {_score(tampering_analysis.get('tampering_score', 0))}", f"{tampering_analysis.get('scoring_region_count', tampering_analysis.get('valid_suspicious_region_count', tampering_analysis.get('suspicious_region_count', 0)))} scoring-eligible region(s), {tampering_analysis.get('suppressed_region_count', 0)} suppressed"],
+        ["Field Text Consistency", f"Score {_score(text_consistency_analysis.get('field_mismatch_score', 0))}", ("; ".join(text_consistency_analysis.get("reasons", [])[:2]) if text_consistency_analysis.get("font_mismatch_detected") else "No strong local field-level text mismatch detected")],
+        ["ELA / Compression Consistency", f"Score {_score(ela_analysis.get('ela_score', 0))}", f"Supporting signal: {len(ela_analysis.get('suspicious_regions', []))} region(s)"],
         ["MVSS Preprocess", preprocessing_analysis.get("method", "none"), f"{preprocessing_analysis.get('removed_region_count', len(preprocessing_analysis.get('removed_regions', preprocessing_analysis.get('qr_regions', []))))} QR-like region(s) removed" if preprocessing_analysis.get("qr_removed") else "No QR region removed before MVSS"],
         ["Physical Condition", f"Score {_score(condition_analysis.get('condition_score', 0))}", f"Confidence: {condition_analysis.get('condition_confidence', 'low')}. " + ("; ".join(condition_analysis.get("reasons", [])[:2]) or "No major fold/tear indicators")],
-        ["Photo Replacement", f"Score {_score(photo_analysis.get('replacement_score', 0))}", ("Synthetic photo suspected; " if photo_analysis.get("ai_photo_suspected") else "") + ("Printed photo likely; " if photo_analysis.get("printed_photo_likely") else "") + ("; ".join(photo_analysis.get("reasons", [])[:2]) or "No photo replacement indicators")],
-        ["Forgery Localization", f"Score {_score(forgery_analysis.get('forgery_score', 0))}", "Forgery localization model unavailable" if forgery_analysis.get("model_available") is False else ("Possible manipulated region detected" if forgery_analysis.get("manipulation_detected") else "No strong forgery localization signal")],
-        ["Field Text Consistency", f"Score {_score(text_consistency_analysis.get('field_mismatch_score', 0))}", ("; ".join(text_consistency_analysis.get("reasons", [])[:2]) if text_consistency_analysis.get("font_mismatch_detected") else "No strong field-level text mismatch detected")],
+        ["Document Quality", f"Quality {_score(quality_analysis.get('quality_score', 'N/A'))}", ("Analysis unreliable due to document condition. Rescan recommended." if quality_analysis.get("rejection_recommended") else "Quality acceptable for automated analysis")],
+        ["Photo Integrity", f"Score {_score(photo_analysis.get('replacement_score', 0))}", "; ".join(photo_analysis.get("reasons", [])[:2]) or "No strong photo integrity indicators"],
         ["Visual Consistency", f"Score {_score(consistency_analysis.get('consistency_score', 0))}", "; ".join(consistency_analysis.get("reasons", [])[:2]) or "No major region inconsistency"],
         ["Correlation", f"{correlation_analysis.get('suspicious_field_count', 0)} field(s)", "OCR fields overlapping visual evidence" if correlation_analysis.get("suspicious_field_count", 0) else "No suspicious OCR-field overlap"],
     ]
@@ -746,7 +790,15 @@ def generate_report(case_id: str):
         styles
     )
 
-    if fraud_score >= 75:
+    if risk_level == "Unreliable Scan" or fraud_analysis.get("status") == "rescan_required":
+
+        verdict = (
+            "Analysis unreliable due to document condition. Rescan recommended. "
+            "The raw detector findings should not be treated as a fraud verdict "
+            "until a clearer, flatter, well-lit document is uploaded."
+        )
+
+    elif fraud_score >= 75:
 
         verdict = (
             "Critical risk: multiple document integrity signals indicate a "
@@ -779,6 +831,16 @@ def generate_report(case_id: str):
         Paragraph(
             verdict,
             styles["NovacBody"]
+        )
+    )
+
+    content.append(
+        Spacer(1, 10)
+    )
+    content.append(
+        Paragraph(
+            "Disclaimer: This report is automated document risk analysis and is not proof of fraud. Manual verification is recommended before making acceptance or rejection decisions.",
+            styles["NovacSmall"]
         )
     )
 

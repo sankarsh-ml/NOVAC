@@ -115,6 +115,20 @@ From the project root:
 backend\model_venvs\forgery_venv\Scripts\python.exe backend\app\services\forgery_localization_runner.py --image backend\uploads\your_image.png
 ```
 
+## Runtime Configuration
+
+The FastAPI service and runner use these optional environment variables:
+
+```text
+TRUFOR_TIMEOUT_SECONDS=180
+TRUFOR_MAX_DIMENSION=1600
+```
+
+`TRUFOR_TIMEOUT_SECONDS` controls how long upload waits for TruFor before
+returning safe unavailable JSON. `TRUFOR_MAX_DIMENSION` bounds the image side
+length sent to TruFor for practical upload latency; localization maps and
+regions are still returned in the original image coordinate space.
+
 ## Success JSON
 
 ```json

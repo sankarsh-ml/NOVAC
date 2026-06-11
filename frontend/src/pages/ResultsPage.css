@@ -45,6 +45,27 @@
   text-align: center;
 }
 
+.reliability-banner {
+  margin-bottom: 30px;
+  padding: 20px 24px;
+  border: 1px solid rgba(250,204,21,.42);
+  border-left: 5px solid #facc15;
+  border-radius: 14px;
+  background: rgba(113,63,18,.38);
+}
+
+.reliability-banner h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  color: #fef3c7;
+}
+
+.reliability-banner p {
+  margin: 0;
+  color: #fde68a;
+  line-height: 1.5;
+}
+
 .gauge-circle {
   width: 250px;
   height: 250px;

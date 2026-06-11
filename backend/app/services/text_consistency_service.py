@@ -3,6 +3,8 @@ import re
 import cv2
 import numpy as np
 
+from app.services.visual_region_utils import any_region_near
+
 
 KEY_FIELD_PATTERNS = [
     ("dob", r"\b(dob|date of birth|year of birth|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b"),
@@ -71,13 +73,32 @@ def _field_type(text):
         ):
             return field
 
-    if re.fullmatch(
-        r"[A-Za-z .'-]{3,}",
-        str(text or "").strip()
-    ):
-        return "name"
-
     return "unknown"
+
+
+def _is_instruction_text(text):
+
+    normalized = str(text or "").strip().lower()
+
+    return bool(
+        re.search(
+            r"\b(government|aadhaar|identity|proof|instruction|valid|issued|authority|unique identification|help|www|uidai)\b",
+            normalized
+        )
+    )
+
+
+def _is_id_like(text):
+
+    normalized = str(text or "").strip()
+    digits = len(re.findall(r"\d", normalized))
+
+    return digits >= 8 or bool(
+        re.fullmatch(
+            r"[\d\s/-]{6,}",
+            normalized
+        )
+    )
 
 
 def _metrics(image, gray, rect):
@@ -180,7 +201,8 @@ def _robust_z(value, values):
 def analyze_text_consistency(
     image_path,
     ocr_lines,
-    extracted_text=None
+    extracted_text=None,
+    visual_regions=None
 ) -> dict:
 
     image = cv2.imread(image_path)
@@ -191,6 +213,8 @@ def analyze_text_consistency(
             "field_mismatch_score": 0,
             "suspicious_fields": [],
             "suspicious_regions": [],
+            "comparisons_used": 0,
+            "comparisons_skipped": 0,
             "reasons": [],
             "error": f"Cannot read image: {image_path}"
         }
@@ -201,8 +225,10 @@ def analyze_text_consistency(
     )
     height, width = gray.shape[:2]
     image_area = float(width * height) if width and height else 1.0
+    visual_regions = visual_regions or []
 
     analyzed = []
+    comparisons_skipped = 0
 
     for line in ocr_lines or []:
         text = str(
@@ -213,11 +239,27 @@ def analyze_text_consistency(
         )
 
         if not text or not rect:
+            comparisons_skipped += 1
+            continue
+
+        confidence = float(line.get("confidence", 0))
+
+        if confidence < 0.62:
+            comparisons_skipped += 1
             continue
 
         area_ratio = (rect["w"] * rect["h"]) / image_area
 
         if area_ratio < 0.0001 or area_ratio > 0.08:
+            comparisons_skipped += 1
+            continue
+
+        if rect["y"] < height * 0.08 or rect["y"] + rect["h"] > height * 0.94:
+            comparisons_skipped += 1
+            continue
+
+        if _is_instruction_text(text):
+            comparisons_skipped += 1
             continue
 
         metrics = _metrics(
@@ -227,97 +269,239 @@ def analyze_text_consistency(
         )
 
         if not metrics:
+            comparisons_skipped += 1
             continue
 
         if metrics["saturation"] > 75:
+            comparisons_skipped += 1
             continue
 
         analyzed.append({
             "text": text,
             "field": _field_type(text),
             "rect": rect,
-            "confidence": float(line.get("confidence", 0)),
+            "confidence": confidence,
             "metrics": metrics
         })
 
-    if len(analyzed) < 5:
+    if len(analyzed) < 3:
         return {
             "font_mismatch_detected": False,
             "field_mismatch_score": 0,
             "suspicious_fields": [],
             "suspicious_regions": [],
+            "comparisons_used": 0,
+            "comparisons_skipped": comparisons_skipped,
             "reasons": []
         }
 
-    baseline = {
-        key: [
-            item["metrics"][key]
-            for item in analyzed
-            if item["field"] == "unknown"
-            or item["confidence"] >= 0.75
+    heights = [
+        item["rect"]["h"]
+        for item in analyzed
+        if item["rect"]["h"] > 0
+    ]
+    median_height = float(np.median(heights)) if heights else 20.0
+
+    def center(rect):
+        return (
+            rect["x"] + rect["w"] / 2,
+            rect["y"] + rect["h"] / 2
+        )
+
+    def same_script(a, b):
+        a_alpha = bool(re.search(r"[A-Za-z]", a))
+        b_alpha = bool(re.search(r"[A-Za-z]", b))
+        a_digit = bool(re.search(r"\d", a))
+        b_digit = bool(re.search(r"\d", b))
+
+        if a_alpha != b_alpha and not (a_digit and b_digit):
+            return False
+
+        return True
+
+    def local_references(item):
+        refs = []
+        rect = item["rect"]
+        cx, cy = center(rect)
+
+        for candidate in analyzed:
+            if candidate is item:
+                continue
+
+            if candidate["confidence"] < 0.72:
+                comparisons_skipped_local[0] += 1
+                continue
+
+            if not same_script(item["text"], candidate["text"]):
+                comparisons_skipped_local[0] += 1
+                continue
+
+            if _is_id_like(item["text"]) != _is_id_like(candidate["text"]):
+                comparisons_skipped_local[0] += 1
+                continue
+
+            other = candidate["rect"]
+            ox, oy = center(other)
+            vertical_distance = abs(cy - oy)
+            horizontal_distance = abs(cx - ox)
+            row_close = vertical_distance <= median_height * 1.8
+            adjacent_row = vertical_distance <= median_height * 2.4 and horizontal_distance <= max(width * 0.32, 220)
+            same_block = (
+                row_close
+                or adjacent_row
+            )
+
+            if not same_block:
+                comparisons_skipped_local[0] += 1
+                continue
+
+            size_ratio = max(rect["h"], other["h"]) / float(max(min(rect["h"], other["h"]), 1))
+
+            if size_ratio > 1.35:
+                comparisons_skipped_local[0] += 1
+                continue
+
+            distance = float(
+                np.hypot(
+                    cx - ox,
+                    cy - oy
+                )
+            )
+            refs.append(
+                (
+                    distance,
+                    candidate
+                )
+            )
+
+        return [
+            candidate
+            for _, candidate in sorted(refs)[:5]
         ]
-        for key in [
-            "height",
-            "edge_density",
-            "sharpness",
-            "background_brightness",
-            "text_darkness",
-            "contrast",
-            "stroke"
-        ]
-    }
 
     suspicious_fields = []
     suspicious_regions = []
+    comparisons_used = 0
+    comparisons_skipped_local = [comparisons_skipped]
 
     for item in analyzed:
         if item["field"] == "unknown":
             continue
 
+        references = local_references(item)
+
+        if len(references) < 2:
+            comparisons_skipped_local[0] += 1
+            continue
+
         metrics = item["metrics"]
         evidence = []
         score = 0
+        reference_metrics = {
+            key: [
+                reference["metrics"][key]
+                for reference in references
+            ]
+            for key in [
+                "height",
+                "edge_density",
+                "sharpness",
+                "background_brightness",
+                "text_darkness",
+                "contrast",
+                "stroke"
+            ]
+        }
 
         checks = [
-            ("height", 2.8, 12, "text height differs"),
-            ("edge_density", 3.0, 12, "edge density differs"),
-            ("sharpness", 3.0, 12, "sharpness differs"),
-            ("background_brightness", 3.0, 10, "local background differs"),
-            ("text_darkness", 3.0, 10, "text darkness differs"),
-            ("contrast", 3.0, 8, "contrast differs"),
-            ("stroke", 3.0, 10, "stroke thickness differs")
+            ("height", 2.6, 8, "local text height differs"),
+            ("edge_density", 2.8, 8, "local edge density differs"),
+            ("sharpness", 3.0, 9, "local sharpness differs"),
+            ("background_brightness", 3.0, 7, "local background differs"),
+            ("text_darkness", 3.0, 7, "local text darkness differs"),
+            ("contrast", 3.0, 6, "local contrast differs"),
+            ("stroke", 3.0, 8, "local stroke thickness differs")
         ]
 
         for key, threshold, weight, label in checks:
             z_score = _robust_z(
                 metrics[key],
-                baseline[key]
+                reference_metrics[key]
             )
 
             if z_score >= threshold:
                 score += weight
                 evidence.append(label)
 
-        if score < 26 or len(evidence) < 2:
+        comparisons_used += len(references)
+
+        if score < 22 or len(evidence) < 2:
             continue
 
         rect = item["rect"]
-        reason = "Text style differs from surrounding document text"
+        region = {
+            "x": rect["x"],
+            "y": rect["y"],
+            "w": rect["w"],
+            "h": rect["h"]
+        }
+        visual_support = any_region_near(
+            region,
+            visual_regions,
+            image_shape=image.shape
+        )
+
+        if visual_support:
+            score += 6
+
+        if score < 32:
+            continue
+
+        reason = "Local field text style differs from nearby reference text"
         region = {
             "x": rect["x"],
             "y": rect["y"],
             "w": rect["w"],
             "h": rect["h"],
             "type": "text_consistency",
-            "reason": reason
+            "source": "Text Consistency",
+            "reason": reason,
+            "scoring_eligible": True,
+            "annotation_eligible": True,
+            "near_visual_evidence": visual_support,
+            "source": "TextMismatch",
+            "area_ratio": round(
+                (rect["w"] * rect["h"]) / image_area,
+                5
+            ),
+            "overlaps_qr": False,
+            "overlaps_photo": False,
+            "overlaps_logo": False,
+            "overlaps_dense_text": False,
+            "overlaps_header_footer": False,
+            "overlaps_damage_or_fold": False,
+            "overlaps_editable_field": True,
+            "editable_field_name": item["field"],
+            "suppression_reason": None
         }
+        nearest_distance = min(
+            float(
+                np.hypot(
+                    center(item["rect"])[0] - center(reference["rect"])[0],
+                    center(item["rect"])[1] - center(reference["rect"])[1]
+                )
+            )
+            for reference in references
+        )
 
         suspicious_fields.append({
             "field": item["field"],
             "value": item["text"],
             "reason": reason,
-            "score": int(min(score, 100)),
+            "score": int(min(score, 50)),
             "region": region,
+            "nearby_reference_count": len(references),
+            "comparison_distance": round(nearest_distance, 2),
             "evidence": evidence[:4]
         })
         suspicious_regions.append(region)
@@ -325,12 +509,12 @@ def analyze_text_consistency(
     total_score = int(
         min(
             sum(field["score"] for field in suspicious_fields),
-            100
+            50
         )
     )
 
     reasons = [
-        "Text field visual style differs from surrounding document text"
+        "Local field text style differs from nearby reference text"
     ] if suspicious_fields else []
 
     return {
@@ -338,5 +522,7 @@ def analyze_text_consistency(
         "field_mismatch_score": total_score,
         "suspicious_fields": suspicious_fields[:5],
         "suspicious_regions": suspicious_regions[:5],
+        "comparisons_used": comparisons_used,
+        "comparisons_skipped": comparisons_skipped_local[0],
         "reasons": reasons
     }

@@ -1,7 +1,6 @@
 import fitz
 import os
-from reportlab.lib import colors
-from reportlab.lib.styles import ParagraphStyle
+
 
 
 def extract_pdf_text(pdf_path: str):
@@ -31,7 +30,7 @@ def pdf_to_image(pdf_path: str):
 
     page = pdf[0]
 
-    pix = page.get_pixmap()
+    pix = page.get_pixmap(dpi=300, alpha=False)
 
     image_path = os.path.splitext(pdf_path)[0] + ".png"
 

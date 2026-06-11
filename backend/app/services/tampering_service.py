@@ -135,28 +135,90 @@ class TamperingService:
         )
 
         suspicious_regions = []
+        suppressed_regions = []
 
         total_area = 0
 
         image_area = original_w * original_h
 
         MIN_AREA = max(
-            1000,
-            image_area * 0.001
+            1200,
+            image_area * 0.002
         )
-        MAX_AREA = image_area * 0.20
+        MAX_AREA = image_area * 0.35
+        raw_region_count = len(contours)
 
         for cnt in contours:
 
             area = cv2.contourArea(cnt)
+            area_ratio = area / float(image_area or 1)
+            x, y, w, h = cv2.boundingRect(cnt)
 
             if area < MIN_AREA:
+                suppressed_regions.append({
+                    "x": int(x),
+                    "y": int(y),
+                    "w": int(w),
+                    "h": int(h),
+                    "area": int(area),
+                    "area_ratio": round(area_ratio, 5),
+                    "source": "MVSS",
+                    "scoring_eligible": False,
+                    "annotation_eligible": False,
+                    "suppression_reason": "Region too small for reliable MVSS evidence",
+                    "reason": "Region too small for reliable MVSS evidence"
+                })
                 continue
 
-            if area > MAX_AREA:
+            if area > MAX_AREA and confidence < 0.85:
+                suppressed_regions.append({
+                    "x": int(x),
+                    "y": int(y),
+                    "w": int(w),
+                    "h": int(h),
+                    "area": int(area),
+                    "area_ratio": round(area_ratio, 5),
+                    "source": "MVSS",
+                    "scoring_eligible": False,
+                    "annotation_eligible": False,
+                    "suppression_reason": "Region covers too much of document for reliable MVSS evidence",
+                    "reason": "Region covers too much of document for reliable MVSS evidence"
+                })
                 continue
 
-            x, y, w, h = cv2.boundingRect(cnt)
+            if w < 18 or h < 18:
+                suppressed_regions.append({
+                    "x": int(x),
+                    "y": int(y),
+                    "w": int(w),
+                    "h": int(h),
+                    "area": int(area),
+                    "area_ratio": round(area_ratio, 5),
+                    "source": "MVSS",
+                    "scoring_eligible": False,
+                    "annotation_eligible": False,
+                    "suppression_reason": "Region dimensions too small for reliable MVSS evidence",
+                    "reason": "Region dimensions too small for reliable MVSS evidence"
+                })
+                continue
+
+            aspect = max(w, h) / float(max(min(w, h), 1))
+
+            if aspect > 8 and area_ratio < 0.03:
+                suppressed_regions.append({
+                    "x": int(x),
+                    "y": int(y),
+                    "w": int(w),
+                    "h": int(h),
+                    "area": int(area),
+                    "area_ratio": round(area_ratio, 5),
+                    "source": "MVSS",
+                    "scoring_eligible": False,
+                    "annotation_eligible": False,
+                    "suppression_reason": "Region is a long thin noise strip",
+                    "reason": "Region is a long thin noise strip"
+                })
+                continue
 
             suspicious_regions.append({
                 "x": int(x),
@@ -164,8 +226,14 @@ class TamperingService:
                 "w": int(w),
                 "h": int(h),
                 "area": int(area),
-                "area_ratio": round(area / float(image_area or 1), 5),
-                "confidence": float(confidence)
+                "area_ratio": round(area_ratio, 5),
+                "confidence": float(confidence),
+                "source": "MVSS",
+                "type": "mvss",
+                "scoring_eligible": True,
+                "annotation_eligible": True,
+                "suppression_reason": None,
+                "reason": "MVSS detected meaningful suspicious visual manipulation region"
             })
 
             total_area += area
@@ -186,6 +254,8 @@ class TamperingService:
             total_area / image_area
         ) * 100
 
+        reasons = []
+
         # Suppress very weak detections
         if confidence < 0.35:
 
@@ -196,26 +266,40 @@ class TamperingService:
             tampered_percent = 0
 
             tampering_score = 0
+            reasons.append(
+                "MVSS confidence below meaningful visual tampering threshold"
+            )
 
         else:
 
-            if tampered_percent < 0.2:
+            if not suspicious_regions:
                 tampering_score = 0
 
-            elif tampered_percent < 1:
-                tampering_score = 2
+            elif confidence >= 0.75 and tampered_percent >= 2:
+                tampering_score = 30
 
-            elif tampered_percent < 3:
-                tampering_score = 4
+            elif confidence >= 0.65 and tampered_percent >= 5:
+                tampering_score = 35
 
-            elif tampered_percent < 8:
-                tampering_score = 6
+            elif confidence >= 0.55 and tampered_percent >= 0.8:
+                tampering_score = 20
 
-            elif tampered_percent < 15:
-                tampering_score = 8
+            elif tampered_percent >= 1.5 or len(suspicious_regions) >= 2:
+                tampering_score = 15
 
             else:
                 tampering_score = 10
+
+            if suspicious_regions:
+                reasons.extend([
+                    "MVSS detected meaningful suspicious visual manipulation region",
+                    "Suspicious region passed area and confidence filters"
+                ])
+
+        tampering_score = min(
+            tampering_score,
+            40
+        )
 
         output_dir = (
             r"D:\novac\backend\uploads\tampering"
@@ -256,11 +340,32 @@ class TamperingService:
             "mvss_confidence":
                 float(confidence),
 
+            "raw_region_count":
+                raw_region_count,
+
+            "scoring_region_count":
+                len(suspicious_regions),
+
+            "annotation_region_count":
+                len(suspicious_regions),
+
             "suspicious_region_count":
                 len(suspicious_regions),
 
             "suspicious_regions":
-                suspicious_regions
+                suspicious_regions,
+
+            "annotation_regions":
+                suspicious_regions,
+
+            "suppressed_regions":
+                suppressed_regions,
+
+            "suppressed_region_count":
+                len(suppressed_regions),
+
+            "reasons":
+                reasons
         }
 
 

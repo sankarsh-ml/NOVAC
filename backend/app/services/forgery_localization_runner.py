@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -18,7 +19,8 @@ def _result(
     suspicious_regions=None,
     localization_map_path=None,
     reasons=None,
-    model_error=None
+    model_error=None,
+    elapsed_time_seconds=0
 ):
 
     return {
@@ -30,13 +32,43 @@ def _result(
         "suspicious_regions": suspicious_regions or [],
         "localization_map_path": localization_map_path,
         "reasons": reasons or [],
-        "model_error": model_error
+        "model_error": model_error,
+        "elapsed_time_seconds": round(
+            float(elapsed_time_seconds or 0),
+            3
+        )
     }
 
 
 def _backend_dir():
 
     return Path(__file__).resolve().parents[2]
+
+
+def _timeout_seconds(default=180):
+
+    try:
+        return int(
+            os.getenv(
+                "TRUFOR_TIMEOUT_SECONDS",
+                str(default)
+            )
+        )
+    except Exception:
+        return default
+
+
+def _max_inference_dimension(default=1600):
+
+    try:
+        return int(
+            os.getenv(
+                "TRUFOR_MAX_DIMENSION",
+                str(default)
+            )
+        )
+    except Exception:
+        return default
 
 
 def _load_runtime_dependencies():
@@ -278,11 +310,14 @@ def _regions_from_map(map_array, confidence_map, image_shape, score):
 
 def _run_trufor(image_path):
 
+    started_at = time.perf_counter()
     dependencies_available, dependency_error = _load_runtime_dependencies()
 
     if not dependencies_available:
         return _result(
-            model_error=dependency_error
+            reasons=[dependency_error],
+            model_error=dependency_error,
+            elapsed_time_seconds=time.perf_counter() - started_at
         )
 
     backend_dir = _backend_dir()
@@ -290,19 +325,27 @@ def _run_trufor(image_path):
 
     if not repo_dir:
         return _result(
+            reasons=[
+                "TruFor repository not found"
+            ],
             model_error=(
                 "TruFor repository not found. Run backend\\scripts\\setup_forgery_model.bat "
                 "and ensure backend\\models\\forgery\\TruFor\\TruFor_train_test\\test.py exists."
-            )
+            ),
+            elapsed_time_seconds=time.perf_counter() - started_at
         )
 
     if not checkpoint:
         return _result(
+            reasons=[
+                "TruFor checkpoint not found"
+            ],
             model_error=(
                 "TruFor checkpoint not found. Expected "
                 "backend\\models\\forgery\\checkpoints\\trufor.pth.tar or "
                 "backend\\models\\forgery\\TruFor\\TruFor_train_test\\pretrained_models\\trufor.pth.tar."
-            )
+            ),
+            elapsed_time_seconds=time.perf_counter() - started_at
         )
 
     image = cv2.imread(
@@ -311,7 +354,11 @@ def _run_trufor(image_path):
 
     if image is None:
         return _result(
-            model_error=f"Cannot read image: {image_path}"
+            reasons=[
+                f"Cannot read image: {image_path}"
+            ],
+            model_error=f"Cannot read image: {image_path}",
+            elapsed_time_seconds=time.perf_counter() - started_at
         )
 
     output_dir = backend_dir / "uploads" / "forgery_maps"
@@ -322,6 +369,27 @@ def _run_trufor(image_path):
     token = uuid.uuid4().hex[:10]
     npz_path = output_dir / f"{Path(image_path).stem}_{token}_trufor.npz"
     map_path = output_dir / f"{Path(image_path).stem}_{token}_trufor_map.png"
+    model_image_path = Path(image_path)
+    max_dimension = _max_inference_dimension()
+    original_h, original_w = image.shape[:2]
+    longest_side = max(original_w, original_h)
+
+    if max_dimension > 0 and longest_side > max_dimension:
+        scale = max_dimension / float(longest_side)
+        resized = cv2.resize(
+            image,
+            (
+                max(1, int(original_w * scale)),
+                max(1, int(original_h * scale))
+            ),
+            interpolation=cv2.INTER_AREA
+        )
+        model_image_path = output_dir / f"{Path(image_path).stem}_{token}_trufor_input.png"
+        cv2.imwrite(
+            str(model_image_path),
+            resized
+        )
+
     train_dir = repo_dir / "TruFor_train_test"
     test_script = train_dir / "test.py"
 
@@ -331,7 +399,7 @@ def _run_trufor(image_path):
         "-g",
         "-1",
         "-in",
-        str(Path(image_path).resolve()),
+        str(model_image_path.resolve()),
         "-out",
         str(npz_path.resolve()),
         "-exp",
@@ -349,7 +417,10 @@ def _run_trufor(image_path):
             **os.environ,
             "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD": "1"
         },
-        timeout=110
+        timeout=max(
+            1,
+            _timeout_seconds() - 5
+        )
     )
 
     if completed.stdout:
@@ -366,16 +437,24 @@ def _run_trufor(image_path):
 
     if completed.returncode != 0:
         return _result(
+            reasons=[
+                "TruFor inference failed"
+            ],
             model_error=(
                 completed.stderr.strip()
                 or completed.stdout.strip()
                 or "TruFor inference failed"
-            )
+            ),
+            elapsed_time_seconds=time.perf_counter() - started_at
         )
 
     if not npz_path.exists():
         return _result(
-            model_error=f"TruFor did not produce expected output: {npz_path}"
+            reasons=[
+                "TruFor did not produce expected localization output"
+            ],
+            model_error=f"TruFor did not produce expected output: {npz_path}",
+            elapsed_time_seconds=time.perf_counter() - started_at
         )
 
     output = np.load(
@@ -397,7 +476,11 @@ def _run_trufor(image_path):
 
     if map_array is None:
         return _result(
-            model_error="TruFor output missing localization map"
+            reasons=[
+                "TruFor output missing localization map"
+            ],
+            model_error="TruFor output missing localization map",
+            elapsed_time_seconds=time.perf_counter() - started_at
         )
 
     score = float(
@@ -458,12 +541,14 @@ def _run_trufor(image_path):
             backend_dir
         ),
         reasons=reasons,
-        model_error=None
+        model_error=None,
+        elapsed_time_seconds=time.perf_counter() - started_at
     )
 
 
 def main():
 
+    started_at = time.perf_counter()
     parser = argparse.ArgumentParser(
         description="NOVAC TruFor forgery localization runner"
     )
@@ -480,7 +565,11 @@ def main():
         print(
             json.dumps(
                 _result(
-                    model_error=f"Image not found: {image_path}"
+                    reasons=[
+                        f"Image not found: {image_path}"
+                    ],
+                    model_error=f"Image not found: {image_path}",
+                    elapsed_time_seconds=time.perf_counter() - started_at
                 )
             )
         )
@@ -499,10 +588,14 @@ if __name__ == "__main__":
         main()
 
     except subprocess.TimeoutExpired:
+        timeout_seconds = _timeout_seconds()
+        message = f"TruFor inference timed out after {timeout_seconds} seconds"
         print(
             json.dumps(
                 _result(
-                    model_error="TruFor inference timed out"
+                    reasons=[message],
+                    model_error=message,
+                    elapsed_time_seconds=timeout_seconds
                 )
             )
         )
@@ -511,6 +604,7 @@ if __name__ == "__main__":
         print(
             json.dumps(
                 _result(
+                    reasons=[str(exc)],
                     model_error=str(exc)
                 )
             )

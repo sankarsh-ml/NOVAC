@@ -5,12 +5,18 @@ FIELD_LABELS = {
     "name": [
         "name",
         "full name",
-        "applicant name"
+        "applicant name",
+        "candidate name",
+        "student name",
+        "holder name",
+        "customer name"
     ],
     "dob": [
         "dob",
+        "d.o.b",
         "date of birth",
-        "birth date"
+        "birth date",
+        "born"
     ],
     "gender": [
         "gender",
@@ -18,22 +24,28 @@ FIELD_LABELS = {
     ],
     "address": [
         "address",
-        "addr"
+        "addr",
+        "residence",
+        "permanent address",
+        "current address"
     ],
     "mobile": [
         "mobile",
         "phone",
-        "contact"
+        "contact",
+        "contact number"
     ],
     "father_name": [
         "father name",
         "father",
+        "father's name",
         "s/o",
         "son of"
     ],
     "mother_name": [
         "mother name",
         "mother",
+        "mother's name",
         "d/o",
         "daughter of"
     ],
@@ -41,14 +53,26 @@ FIELD_LABELS = {
         "document number",
         "id number",
         "id no",
+        "id",
         "card number",
         "account number",
         "account no",
         "permanent account number",
         "aadhaar no",
         "aadhar no",
+        "aadhaar number",
+        "aadhar number",
+        "pan no",
+        "pan number",
+        "passport no",
+        "passport number",
+        "license no",
+        "licence no",
         "enrolment no",
-        "enrollment no"
+        "enrollment no",
+        "registration number",
+        "reg no",
+        "roll no"
     ],
     "vid": [
         "vid",
@@ -57,7 +81,8 @@ FIELD_LABELS = {
     "pin_code": [
         "pin code",
         "pincode",
-        "postal code"
+        "postal code",
+        "zip code"
     ],
     "issue_date": [
         "issue date",
@@ -67,8 +92,11 @@ FIELD_LABELS = {
     "expiry_date": [
         "expiry",
         "expires",
+        "expiry date",
         "valid upto",
-        "valid until"
+        "valid until",
+        "valid till",
+        "date of expiry"
     ]
 }
 
@@ -103,8 +131,13 @@ LABEL_BLOCKLIST_VALUES = {
     "permanent account number",
     "your aadhaar no",
     "aadhaar no",
+    "aadhar no",
     "signature",
-    "information"
+    "information",
+    "identity card",
+    "certificate",
+    "document",
+    "male female"
 }
 
 
@@ -129,12 +162,14 @@ VALUE_LABEL_WORDS = {
     "pin",
     "code",
     "signature",
-    "holder"
+    "holder",
+    "issued",
+    "expiry",
+    "valid"
 }
 
 
 def _clean(text):
-
     return re.sub(
         r"\s+",
         " ",
@@ -143,16 +178,15 @@ def _clean(text):
 
 
 def _normalize(text):
-
-    return re.sub(
+    normalized = re.sub(
         r"[^a-z0-9/ ]+",
         " ",
         _clean(text).lower()
     )
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _bbox_rect(bbox):
-
     if not bbox or len(bbox) != 4:
         return {
             "x": 0,
@@ -161,23 +195,30 @@ def _bbox_rect(bbox):
             "h": 0
         }
 
-    xs = [point[0] for point in bbox]
-    ys = [point[1] for point in bbox]
+    try:
+        xs = [point[0] for point in bbox]
+        ys = [point[1] for point in bbox]
 
-    return {
-        "x": int(min(xs)),
-        "y": int(min(ys)),
-        "w": int(max(xs) - min(xs)),
-        "h": int(max(ys) - min(ys))
-    }
+        return {
+            "x": int(min(xs)),
+            "y": int(min(ys)),
+            "w": int(max(xs) - min(xs)),
+            "h": int(max(ys) - min(ys))
+        }
+
+    except Exception:
+        return {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+        }
 
 
 def _prepare_lines(ocr_result):
-
     lines = []
 
     for index, line in enumerate(ocr_result.get("lines", [])):
-
         text = _clean(
             line.get("text", "")
         )
@@ -185,7 +226,7 @@ def _prepare_lines(ocr_result):
         if not text:
             continue
 
-        rect = _bbox_rect(
+        rect = line.get("region") or _bbox_rect(
             line.get("bbox")
         )
 
@@ -213,16 +254,39 @@ def _prepare_lines(ocr_result):
 
 
 def _label_match(line):
+    """
+    Stricter label detection.
+
+    Avoids matching weak labels like "id" or "name" when they appear
+    somewhere in the middle of normal document text.
+    """
 
     norm = line["norm"]
+    raw_text = line["text"]
+
+    if not norm:
+        return None, None
 
     for field, labels in FIELD_LABELS.items():
         for label in labels:
             label_norm = _normalize(label)
 
+            if not label_norm:
+                continue
+
+            # Exact label line.
+            if norm == label_norm:
+                return field, label_norm
+
+            # Label at the start, e.g. "Name Rahul Sharma".
+            if norm.startswith(label_norm + " "):
+                return field, label_norm
+
+            # Label with punctuation, e.g. "Name:", "DOB -".
             if re.search(
-                rf"\b{re.escape(label_norm)}\b",
-                norm
+                rf"^\s*{re.escape(label)}\s*[:=\-]",
+                raw_text,
+                flags=re.IGNORECASE
             ):
                 return field, label_norm
 
@@ -230,41 +294,41 @@ def _label_match(line):
 
 
 def _strip_label_from_text(text, label_norm):
+    """
+    Extracts same-line values:
+    Name: Rahul Sharma
+    DOB - 12/05/2001
+    Sex F
+    """
 
-    norm = _normalize(text)
+    raw = _clean(text)
+    norm = _normalize(raw)
 
-    if label_norm not in norm:
+    if not label_norm or not norm.startswith(label_norm):
         return ""
 
-    parts = re.split(
-        r"\s*[:=\-]\s*",
-        text,
-        maxsplit=1
+    # Strong case: "Name: Rahul", "DOB - 12/05/2001".
+    match = re.match(
+        r"^\s*(.+?)\s*[:=\-]\s*(.+)$",
+        raw
     )
 
-    if len(parts) == 2:
-        return _clean(parts[1])
+    if match:
+        return _clean(match.group(2))
 
-    # Only accept same-line values when the readable text starts with the label.
-    if norm.startswith(label_norm):
-        pattern = re.compile(
-            re.escape(label_norm),
-            flags=re.IGNORECASE
+    # Soft case: "Name Rahul Sharma", "DOB 12/05/2001".
+    raw_words = raw.split()
+    label_words = label_norm.split()
+
+    if len(raw_words) > len(label_words):
+        return _clean(
+            " ".join(raw_words[len(label_words):])
         )
-        cleaned_norm = pattern.sub(
-            "",
-            norm,
-            count=1
-        ).strip(" /:-")
-
-        if cleaned_norm and cleaned_norm != norm:
-            return _clean(cleaned_norm)
 
     return ""
 
 
 def _is_bad_value(value):
-
     norm = _normalize(value)
 
     if not norm:
@@ -280,7 +344,6 @@ def _is_bad_value(value):
 
 
 def _letters_only(value):
-
     return re.sub(
         r"[^A-Za-z ]+",
         " ",
@@ -288,8 +351,92 @@ def _letters_only(value):
     )
 
 
-def _valid_value_for_field(field, value):
+def _looks_like_date(value):
+    value = _clean(value)
 
+    return bool(
+        re.search(
+            r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+            value
+        )
+        or re.search(
+            r"\b\d{1,2}[.]\d{1,2}[.]\d{2,4}\b",
+            value
+        )
+        or re.search(
+            r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b",
+            value
+        )
+        or re.search(
+            r"\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{2,4}\b",
+            value,
+            flags=re.IGNORECASE
+        )
+    )
+
+
+def _looks_like_gender(value):
+    norm = _normalize(value).strip()
+
+    return norm in {
+        "male",
+        "female",
+        "other",
+        "m",
+        "f",
+        "transgender"
+    }
+
+
+def _normalize_gender(value):
+    norm = _normalize(value).strip()
+
+    if norm == "m":
+        return "Male"
+
+    if norm == "f":
+        return "Female"
+
+    if norm in {"male", "female", "other", "transgender"}:
+        return norm.title()
+
+    return _clean(value)
+
+
+def _looks_like_document_number(value):
+    compact = re.sub(
+        r"[^A-Za-z0-9]+",
+        "",
+        _clean(value)
+    ).upper()
+
+    if not compact:
+        return False
+
+    if not re.search(r"\d", compact):
+        return False
+
+    return bool(
+        re.fullmatch(
+            r"[A-Z]{5}\d{4}[A-Z]",
+            compact
+        )
+        or re.fullmatch(
+            r"\d{12}",
+            compact
+        )
+        or re.fullmatch(
+            r"\d{16}",
+            compact
+        )
+        or re.fullmatch(
+            r"[A-Z0-9]{8,20}",
+            compact
+        )
+    )
+
+
+def _valid_value_for_field(field, value):
     value = _clean(value).strip(" :;,-")
     norm = _normalize(value)
 
@@ -297,20 +444,10 @@ def _valid_value_for_field(field, value):
         return False
 
     if field in {"dob", "issue_date", "expiry_date"}:
-        return bool(
-            re.fullmatch(
-                r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}",
-                value
-            )
-        )
+        return _looks_like_date(value)
 
     if field == "gender":
-        return bool(
-            re.fullmatch(
-                r"(male|female|other)",
-                norm
-            )
-        )
+        return _looks_like_gender(value)
 
     if field == "vid":
         compact = re.sub(
@@ -347,29 +484,7 @@ def _valid_value_for_field(field, value):
         )
 
     if field == "document_number":
-        compact = re.sub(
-            r"[^A-Za-z0-9]+",
-            "",
-            value
-        ).upper()
-
-        if not re.search(r"\d", compact):
-            return False
-
-        return bool(
-            re.fullmatch(
-                r"[A-Z]{5}\d{4}[A-Z]",
-                compact
-            )
-            or re.fullmatch(
-                r"\d{12}",
-                compact
-            )
-            or re.fullmatch(
-                r"[A-Z0-9]{8,16}",
-                compact
-            )
-        )
+        return _looks_like_document_number(value)
 
     if field in {"name", "father_name", "mother_name"}:
         if not re.fullmatch(
@@ -384,6 +499,22 @@ def _valid_value_for_field(field, value):
         ):
             return False
 
+        if re.search(r"\d", value):
+            return False
+
+        compact = re.sub(
+            r"[^A-Za-z0-9]+",
+            "",
+            value
+        )
+
+        if re.fullmatch(
+            r"[A-Z0-9]{6,}",
+            compact,
+            flags=re.IGNORECASE
+        ) and re.search(r"\d", compact):
+            return False
+
         letters = _letters_only(
             value
         )
@@ -396,7 +527,7 @@ def _valid_value_for_field(field, value):
         if not words or len(" ".join(words)) < 3:
             return False
 
-        if re.search(r"\d", value):
+        if len(words) > 6:
             return False
 
         return True
@@ -417,7 +548,6 @@ def _valid_value_for_field(field, value):
 
 
 def _vertical_overlap(a, b):
-
     top = max(a["y"], b["y"])
     bottom = min(a["y"] + a["h"], b["y"] + b["h"])
 
@@ -430,95 +560,121 @@ def _vertical_overlap(a, b):
     )
 
 
-def _find_adjacent_value(lines, label_position, field):
+def _candidate_score(label, candidate, field):
+    """
+    Scores candidate values near a label.
 
-    label = lines[label_position]
+    This reduces wrong matches like:
+    name -> document number
+    dob -> F
+    """
+
+    value = candidate["text"]
+
+    if not _valid_value_for_field(field, value):
+        return -9999
+
     label_rect = label["rect"]
+    rect = candidate["rect"]
+
+    score = 0.0
+
+    score += candidate["confidence"] * 20
+
+    overlap = _vertical_overlap(
+        label_rect,
+        rect
+    )
+
+    x_gap = rect["x"] - (
+        label_rect["x"]
+        + label_rect["w"]
+    )
+
+    # Same-row value on the right.
+    if overlap >= 0.45 and -12 <= x_gap <= 380:
+        score += 35
+        score -= min(abs(x_gap) / 35, 12)
+
+    # Value below label.
+    y_gap = rect["y"] - (
+        label_rect["y"]
+        + label_rect["h"]
+    )
+
+    x_delta = abs(
+        rect["x"]
+        - label_rect["x"]
+    )
+
+    if 0 <= y_gap <= max(label_rect["h"] * 2.2, 55):
+        score += 20
+        score -= min(y_gap / 10, 10)
+
+        if x_delta <= max(label_rect["w"] * 1.4, 160):
+            score += 10
+            score -= min(x_delta / 45, 8)
+
+    # Penalize values that are far above or far below.
+    if y_gap < -20:
+        score -= 30
+
+    if y_gap > max(label_rect["h"] * 5, 140):
+        score -= 25
+
+    # Field-specific confidence boost.
+    if field in {"dob", "issue_date", "expiry_date"} and _looks_like_date(value):
+        score += 25
+
+    if field == "gender" and _looks_like_gender(value):
+        score += 25
+
+    if field == "document_number" and _looks_like_document_number(value):
+        score += 22
+
+    if field in {"name", "father_name", "mother_name"}:
+        score += 20
+
+    return score
+
+
+def _find_adjacent_value(lines, label_position, field):
+    label = lines[label_position]
     candidates = []
 
     for candidate in lines:
-
         if candidate["index"] == label["index"]:
             continue
 
         if _label_match(candidate)[0]:
             continue
 
-        value = candidate["text"]
+        score = _candidate_score(
+            label,
+            candidate,
+            field
+        )
 
-        if not _valid_value_for_field(field, value):
+        if score <= -999:
             continue
 
-        rect = candidate["rect"]
-        overlap = _vertical_overlap(
-            label_rect,
-            rect
-        )
-        x_gap = rect["x"] - (
-            label_rect["x"]
-            + label_rect["w"]
-        )
-
-        if overlap >= 0.45 and -12 <= x_gap <= 300:
-            candidates.append(
-                (
-                    abs(x_gap),
-                    abs(rect["y"] - label_rect["y"]),
-                    candidate["index"],
-                    candidate
-                )
+        candidates.append(
+            (
+                -score,
+                abs(candidate["rect"]["y"] - label["rect"]["y"]),
+                abs(candidate["rect"]["x"] - label["rect"]["x"]),
+                candidate["index"],
+                candidate
             )
+        )
 
     if candidates:
-        return sorted(candidates)[0][3]
-
-    # Fallback: immediate next readable line below the label.
-    below = []
-
-    for candidate in lines:
-
-        if candidate["index"] == label["index"]:
-            continue
-
-        if _label_match(candidate)[0]:
-            continue
-
-        value = candidate["text"]
-
-        if not _valid_value_for_field(field, value):
-            continue
-
-        rect = candidate["rect"]
-        y_gap = rect["y"] - (
-            label_rect["y"]
-            + label_rect["h"]
-        )
-        x_delta = abs(
-            rect["x"]
-            - label_rect["x"]
-        )
-
-        if (
-            0 <= y_gap <= max(label_rect["h"] * 1.6, 38)
-            and x_delta <= max(label_rect["w"] * 1.4, 150)
-        ):
-            below.append(
-                (
-                    y_gap,
-                    x_delta,
-                    candidate["index"],
-                    candidate
-                )
-            )
-
-    if below:
-        return sorted(below)[0][3]
+        return sorted(candidates)[0][4]
 
     return None
 
 
 def _average_confidence(lines):
-
     if not lines:
         return 0
 
@@ -538,8 +694,10 @@ def _add_confirmed_field(
     value,
     source_lines
 ):
-
     value = _clean(value)
+
+    if key == "gender":
+        value = _normalize_gender(value)
 
     if not _valid_value_for_field(key, value):
         return False
@@ -548,9 +706,11 @@ def _add_confirmed_field(
         return False
 
     fields[key] = value
+
     confidences[key] = _average_confidence(
         source_lines
     )
+
     sources[key] = [
         {
             "text": line["text"],
@@ -559,6 +719,7 @@ def _add_confirmed_field(
         }
         for line in source_lines
     ]
+
     details[key] = {
         "value": value,
         "confidence": confidences[key],
@@ -570,13 +731,11 @@ def _add_confirmed_field(
 
 
 def _collect_address(lines, label_position):
-
     label = lines[label_position]
     label_rect = label["rect"]
     collected = []
 
     for candidate in lines:
-
         if candidate["index"] == label["index"]:
             continue
 
@@ -584,6 +743,7 @@ def _collect_address(lines, label_position):
             continue
 
         rect = candidate["rect"]
+
         y_gap = rect["y"] - (
             label_rect["y"]
             + label_rect["h"]
@@ -592,13 +752,17 @@ def _collect_address(lines, label_position):
         if y_gap < 0 or y_gap > max(label_rect["h"] * 8, 180):
             continue
 
-        if abs(rect["x"] - label_rect["x"]) > max(label_rect["w"] * 2, 220):
+        if abs(rect["x"] - label_rect["x"]) > max(label_rect["w"] * 2, 240):
             continue
 
+        # Stop collecting if a strong ID-like number appears.
         if re.search(
             r"\b\d{4}\s+\d{4}\b",
             candidate["text"]
         ):
+            break
+
+        if _label_match(candidate)[0]:
             break
 
         if not _valid_value_for_field(
@@ -622,7 +786,6 @@ def _possible_value(
     line,
     reason
 ):
-
     value = _clean(value)
 
     if not value:
@@ -655,11 +818,9 @@ def _possible_value(
 
 
 def _extract_possible_values(lines):
-
     possible = []
 
     for line in lines:
-
         text = line["text"]
 
         for match in re.finditer(
@@ -699,7 +860,7 @@ def _extract_possible_values(lines):
             )
 
         for match in re.finditer(
-            r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+            r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b\d{1,2}[.]\d{1,2}[.]\d{2,4}\b|\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b",
             text
         ):
             _possible_value(
@@ -708,6 +869,19 @@ def _extract_possible_values(lines):
                 match.group(0),
                 line,
                 "date-like pattern"
+            )
+
+        for match in re.finditer(
+            r"\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{2,4}\b",
+            text,
+            flags=re.IGNORECASE
+        ):
+            _possible_value(
+                possible,
+                "date_like_value",
+                match.group(0),
+                line,
+                "month-name date pattern"
             )
 
         compact = re.sub(
@@ -728,28 +902,54 @@ def _extract_possible_values(lines):
                 "10-digit mobile-like pattern"
             )
 
-        if re.search(
-            r"\b(male|female|other)\b",
+        gender_match = re.search(
+            r"\b(male|female|other|transgender|m|f)\b",
             text,
             flags=re.IGNORECASE
-        ):
+        )
+
+        if gender_match:
             _possible_value(
                 possible,
                 "gender_like_value",
-                re.search(
-                    r"\b(male|female|other)\b",
-                    text,
-                    flags=re.IGNORECASE
-                ).group(1).title(),
+                _normalize_gender(gender_match.group(1)),
                 line,
-                "gender-like word"
+                "gender-like value"
             )
 
     return possible
 
 
-def extract_fields(ocr_result):
+def _build_field_warnings(ordered_fields):
+    warnings = []
 
+    if "name" in ordered_fields and _looks_like_document_number(
+        ordered_fields["name"]
+    ):
+        warnings.append(
+            "Name field looks like a document number; review extraction."
+        )
+
+    if "dob" in ordered_fields and not _valid_value_for_field(
+        "dob",
+        ordered_fields["dob"]
+    ):
+        warnings.append(
+            "DOB field does not look like a valid date."
+        )
+
+    if "gender" in ordered_fields and not _valid_value_for_field(
+        "gender",
+        ordered_fields["gender"]
+    ):
+        warnings.append(
+            "Gender field does not look like a valid gender value."
+        )
+
+    return warnings
+
+
+def extract_fields(ocr_result):
     lines = _prepare_lines(
         ocr_result
     )
@@ -761,7 +961,6 @@ def extract_fields(ocr_result):
     consumed_indexes = set()
 
     for position, line in enumerate(lines):
-
         field, label_norm = _label_match(
             line
         )
@@ -776,15 +975,20 @@ def extract_fields(ocr_result):
 
         source_lines = [line]
 
+        if value and not _valid_value_for_field(field, value):
+            value = ""
+
         if not value and field == "address":
             address_lines = _collect_address(
                 lines,
                 position
             )
+
             value = ", ".join(
                 item["text"]
                 for item in address_lines
             )
+
             source_lines.extend(address_lines)
 
         elif not value:
@@ -837,23 +1041,34 @@ def extract_fields(ocr_result):
         if field in fields
     }
 
+    ordered_confidences = {
+        field: confidences[field]
+        for field in ordered_fields
+    }
+
+    ordered_sources = {
+        field: sources[field]
+        for field in ordered_fields
+    }
+
+    ordered_details = {
+        field: details[field]
+        for field in ordered_fields
+    }
+
+    field_warnings = _build_field_warnings(
+        ordered_fields
+    )
+
     return {
         "fields": ordered_fields,
-        "field_confidences": {
-            field: confidences[field]
-            for field in ordered_fields
-        },
-        "field_sources": {
-            field: sources[field]
-            for field in ordered_fields
-        },
-        "field_details": {
-            field: details[field]
-            for field in ordered_fields
-        },
+        "field_confidences": ordered_confidences,
+        "field_sources": ordered_sources,
+        "field_details": ordered_details,
         "possible_values": possible_values[:30],
         "unmapped_lines": unmapped_lines[:60],
         "field_count": len(ordered_fields),
         "possible_value_count": len(possible_values),
+        "field_warnings": field_warnings,
         "extraction_mode": "strict_label_anchor"
     }
