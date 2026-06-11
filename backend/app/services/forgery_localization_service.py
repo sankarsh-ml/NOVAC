@@ -7,7 +7,7 @@ def _fallback(error):
 
     return {
         "model_available": False,
-        "model": "forgery-localization-unavailable",
+        "model": "TruFor",
         "manipulation_detected": False,
         "forgery_score": 0,
         "confidence": 0,
@@ -42,7 +42,7 @@ def _venv_python():
 
 def analyze_forgery_localization(
     image_path: str,
-    timeout_seconds: int = 90
+    timeout_seconds: int = 120
 ) -> dict:
 
     backend_dir = _backend_dir()
@@ -98,7 +98,10 @@ def analyze_forgery_localization(
 
     except Exception:
         return _fallback(
-            "Forgery localization runner returned invalid JSON"
+            (
+                "Forgery localization runner returned invalid JSON. "
+                f"stderr: {(completed.stderr or '').strip()[:500]}"
+            )
         )
 
     expected_defaults = _fallback(None)
