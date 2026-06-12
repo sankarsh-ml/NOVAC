@@ -130,6 +130,29 @@ function ResultsPage() {
   const quality =
     result?.document_quality_analysis ?? {};
 
+  const authenticity =
+    result?.document_authenticity_analysis ?? {};
+
+  const resultStatus =
+    result?.fraud_analysis?.result_status
+    ?? result?.result_status;
+
+  const qualityBadge =
+    result?.fraud_analysis?.quality_badge
+    ?? result?.quality_badge;
+
+  const qualityNotice =
+    result?.fraud_analysis?.quality_notice
+    ?? result?.quality_notice;
+
+  const bannerTitle =
+    result?.fraud_analysis?.banner_title
+    ?? result?.banner_title;
+
+  const bannerBody =
+    result?.fraud_analysis?.banner_body
+    ?? result?.banner_body;
+
   const forgery =
     result?.forgery_localization_analysis ?? {};
 
@@ -179,7 +202,14 @@ function ResultsPage() {
 
           <div className="stat-card">
             <h3>Risk Level</h3>
-            <RiskBadge level={riskLevel} />
+            <div className="badge-stack">
+              <RiskBadge level={riskLevel} />
+              {qualityBadge && (
+                <span className="quality-badge">
+                  {qualityBadge}
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="stat-card">
@@ -190,11 +220,21 @@ function ResultsPage() {
           </div>
         </div>
 
-        {quality.rejection_recommended && (
+        {bannerTitle && (
           <div className="reliability-banner">
-            <h2>Analysis reliability low - please upload a clearer document.</h2>
+            <h2>{bannerTitle}</h2>
             <p>
-              Document appears too worn, blurred, or damaged for reliable automated verification.
+              {bannerBody}
+            </p>
+          </div>
+        )}
+
+        {qualityBadge && resultStatus !== "unprocessable" && (
+          <div className="quality-notice-banner">
+            <h2>{qualityBadge}</h2>
+            <p>
+              {qualityNotice
+                ?? "The document was analyzed, but quality or physical condition may reduce confidence in some detector signals."}
             </p>
           </div>
         )}
@@ -268,6 +308,13 @@ function ResultsPage() {
               <span>{riskLevel}</span>
             </div>
 
+            {qualityBadge && (
+              <div className="meta-row">
+                <span>Quality</span>
+                <span>{qualityBadge}</span>
+              </div>
+            )}
+
             <div className="meta-row">
               <span>Score</span>
               <span>{fraudScore}</span>
@@ -327,11 +374,30 @@ function ResultsPage() {
               title="Document Quality"
               score={metric(quality.quality_score, "N/A")}
               status={
-                quality.rejection_recommended
-                  ? "Analysis unreliable - rescan recommended"
+                quality.quality_status === "unprocessable"
+                  ? "Document could not be analyzed reliably"
+                  : quality.quality_status === "bad"
+                  ? "Document has significant quality or physical-condition issues, but was analyzed"
+                  : quality.quality_status === "warning"
+                  ? "Document was analyzed with quality warnings"
                   : "Document quality is acceptable for automated analysis"
               }
               reasons={quality.reasons}
+            />
+
+            <DetectorCard
+              title="Document Authenticity"
+              score={metric(authenticity.synthetic_score, "N/A")}
+              status={
+                authenticity.official_digital_pdf_detected
+                  ? "Official digital PDF structure detected"
+                  : authenticity.synthetic_detected
+                  ? "Synthetic/authenticity indicator detected"
+                  : authenticity.acquisition_type === "camera_capture"
+                  ? "Natural camera/print acquisition traces detected"
+                  : "No strong synthetic document indicators detected"
+              }
+              reasons={authenticity.reasons}
             />
 
             {Number(contributions.detector_agreement?.contribution ?? 0) > 0 && (

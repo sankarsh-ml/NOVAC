@@ -1,5 +1,8 @@
 import os
 import cv2
+import logging
+import threading
+import time
 import torch
 import numpy as np
 
@@ -16,18 +19,51 @@ if MVSS_PATH not in sys.path:
 from models.mvssnet import get_mvss
 from common.tools import inference_single
 
+logger = logging.getLogger(__name__)
+
+MVSS_MODEL_VERSION = "mvssnet_casia"
+MVSS_CHECKPOINT_PATH = r"D:\novac\backend\MVSS-Net\ckpt\mvssnet_casia.pt"
+USE_FP16_INFERENCE = os.getenv("USE_FP16_INFERENCE", "false").lower() == "true"
+MVSS_DEVICE = os.getenv("MVSS_DEVICE", "cpu").lower()
+
 
 class TamperingService:
 
     def __init__(self):
 
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
-
-        self.model = self._load_model()
+        self.device = None
+        self.model = None
+        self._model_lock = threading.Lock()
 
     def _load_model(self):
+
+        logger.info("Loading MVSS model...")
+        started_at = time.perf_counter()
+        logger.info("MVSS configured for CPU mode")
+        logger.info("MVSS torch version: %s", torch.__version__)
+        selected_device = "cpu"
+
+        if MVSS_DEVICE == "cuda":
+            logger.warning(
+                "MVSS_DEVICE=cuda was requested, but MVSS defaults to CPU for compatibility. "
+                "Set MVSS_ALLOW_CUDA=true only after validating output parity."
+            )
+
+            if os.getenv("MVSS_ALLOW_CUDA", "false").lower() == "true" and torch.cuda.is_available():
+                selected_device = "cuda"
+
+        device = torch.device(selected_device)
+        logger.info("MVSS selected device: %s", device.type)
+        logger.info("MVSS running on %s", device.type)
+
+        if device.type == "cpu":
+            thread_count = os.getenv("MVSS_CPU_THREADS")
+
+            if thread_count:
+                try:
+                    torch.set_num_threads(max(1, int(thread_count)))
+                except Exception:
+                    logger.exception("Unable to set MVSS_CPU_THREADS=%s", thread_count)
 
         model = get_mvss(
             backbone="resnet50",
@@ -39,12 +75,12 @@ class TamperingService:
         )
 
         checkpoint_path = (
-            r"D:\novac\backend\MVSS-Net\ckpt\mvssnet_casia.pt"
+            MVSS_CHECKPOINT_PATH
         )
 
         checkpoint = torch.load(
             checkpoint_path,
-            map_location=self.device
+            map_location=device
         )
 
         model.load_state_dict(
@@ -52,15 +88,49 @@ class TamperingService:
             strict=True
         )
 
-        model.to(self.device)
+        model.to(device)
 
         model.eval()
 
+        if USE_FP16_INFERENCE and device.type == "cuda":
+            model.half()
+
+        self.device = device
+        logger.info(
+            "MVSS model loaded in %.3f seconds",
+            time.perf_counter() - started_at
+        )
+
         return model
 
-    def analyze(self, image_path):
+    def _get_model(self):
 
-        image = cv2.imread(image_path)
+        if self.model is not None:
+            logger.info("Using cached MVSS model")
+            return self.model
+
+        with self._model_lock:
+            if self.model is None:
+                self.model = self._load_model()
+            else:
+                logger.info("Using cached MVSS model")
+
+        return self.model
+
+    def analyze(self, image_path, shared_preprocessing=None):
+
+        total_started_at = time.perf_counter()
+        timings = {}
+        preprocess_started_at = time.perf_counter()
+        model = self._get_model()
+
+        image = None
+
+        if shared_preprocessing:
+            image = shared_preprocessing.get("original_image_bgr")
+
+        if image is None:
+            image = cv2.imread(image_path)
 
         if image is None:
             raise Exception(
@@ -74,21 +144,57 @@ class TamperingService:
             (512, 512)
         )
 
-        with torch.no_grad():
+        timings["mvss_preprocess_seconds"] = round(
+            time.perf_counter() - preprocess_started_at,
+            3
+        )
+        inference_started_at = time.perf_counter()
+
+        with torch.inference_mode():
 
             mask, confidence = inference_single(
                 img=resized,
-                model=self.model,
+                model=model,
                 th=0.5
             )
 
-        return self._process_mask(
+        timings["mvss_inference_seconds"] = round(
+            time.perf_counter() - inference_started_at,
+            3
+        )
+        postprocess_started_at = time.perf_counter()
+
+        result = self._process_mask(
             mask,
             image_path,
             original_w,
             original_h,
             confidence
         )
+        timings["mvss_postprocess_seconds"] = round(
+            time.perf_counter() - postprocess_started_at,
+            3
+        )
+        timings["mvss_total_seconds"] = round(
+            time.perf_counter() - total_started_at,
+            3
+        )
+        result["timings"] = timings
+        result["model_device"] = self.device.type if self.device else "unknown"
+        result["model_version"] = MVSS_MODEL_VERSION
+        result["cache_hit"] = False
+        result["completed"] = True
+        result["enabled"] = True
+        result["timed_out"] = False
+        result["score"] = result.get("tampering_score", 0)
+        timings["mvss_cache_hit"] = False
+        timings["mvss_timed_out"] = False
+
+        logger.info("MVSS preprocessing took %.3f seconds", timings["mvss_preprocess_seconds"])
+        logger.info("MVSS model inference took %.3f seconds", timings["mvss_inference_seconds"])
+        logger.info("MVSS postprocessing took %.3f seconds", timings["mvss_postprocess_seconds"])
+
+        return result
 
     def _process_mask(
         self,

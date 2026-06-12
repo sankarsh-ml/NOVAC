@@ -30,6 +30,20 @@ def _risk_level(score):
     return "Critical"
 
 
+def _fraud_risk_level(score):
+
+    if score >= 75:
+        return "Critical"
+
+    if score >= 50:
+        return "High Risk"
+
+    if score >= 25:
+        return "Medium Risk"
+
+    return "Low Risk"
+
+
 def _add_reason(reasons, reason):
 
     if reason and reason not in reasons:
@@ -381,7 +395,8 @@ def calculate_fraud_score(
     forgery_localization_result: dict = None,
     text_consistency_result: dict = None,
     visual_consistency_result: dict = None,
-    document_quality_result: dict = None
+    document_quality_result: dict = None,
+    document_authenticity_result: dict = None
 ) -> dict:
 
     reasons = []
@@ -400,6 +415,7 @@ def calculate_fraud_score(
     text_consistency_result = text_consistency_result or {}
     visual_consistency_result = visual_consistency_result or {}
     document_quality_result = document_quality_result or {}
+    document_authenticity_result = document_authenticity_result or {}
 
     metadata_score = _cap(
         metadata_result.get("risk_score", 0) * 0.55,
@@ -619,6 +635,46 @@ def calculate_fraud_score(
     }
     components["document_quality"] = 0
 
+    synthetic_score_raw = float(
+        document_authenticity_result.get("synthetic_score", 0)
+        or document_authenticity_result.get("ai_generated_score", 0)
+        or 0
+    )
+    synthetic_detected = bool(
+        document_authenticity_result.get("synthetic_detected", False)
+    )
+    official_digital_pdf = bool(
+        document_authenticity_result.get("official_digital_pdf_detected", False)
+    )
+    authenticity_contribution = 0
+    authenticity_reason = "No strong synthetic document signal"
+
+    if official_digital_pdf:
+        authenticity_reason = "Official digital PDF structure detected"
+    elif synthetic_detected or synthetic_score_raw >= 70:
+        authenticity_contribution = _cap(synthetic_score_raw * 0.32, 32)
+        authenticity_reason = "Document appears digitally generated or synthetic"
+        active_groups.append("document_authenticity")
+        _add_reason(reasons, authenticity_reason)
+    elif synthetic_score_raw >= 45:
+        authenticity_contribution = _cap(synthetic_score_raw * 0.10, 8)
+        authenticity_reason = "Weak synthetic document indicators detected"
+
+        if authenticity_contribution >= 5:
+            active_groups.append("document_authenticity")
+            _add_reason(reasons, authenticity_reason)
+
+    components["document_authenticity"] = round(authenticity_contribution, 2)
+    detector_contributions["document_authenticity"] = {
+        "raw_score": round(synthetic_score_raw, 2),
+        "authenticity_score": document_authenticity_result.get("authenticity_score", 0),
+        "synthetic_detected": synthetic_detected,
+        "acquisition_type": document_authenticity_result.get("acquisition_type"),
+        "official_digital_pdf_detected": official_digital_pdf,
+        "contribution": round(authenticity_contribution, 2),
+        "reason": authenticity_reason
+    }
+
     if quality_rejection:
         components["detector_agreement"] = 0
         detector_contributions["detector_agreement"] = {
@@ -659,26 +715,11 @@ def calculate_fraud_score(
         )
         score = max(score, 75)
 
-    status = "success"
-    strong_non_quality_evidence = (
-        masking_detected
-        and (
-            correlation_score >= 5
-            or field_warnings
+    if synthetic_detected and not official_digital_pdf:
+        escalations.append(
+            "Synthetic document authenticity signal detected"
         )
-    )
-
-    if quality_rejection and not strong_non_quality_evidence:
-        status = "rescan_required"
-        score = min(score, 40)
-        _add_reason(
-            reasons,
-            "Document condition prevents reliable automated verification"
-        )
-        _add_reason(
-            reasons,
-            "Upload a clearer, flatter, well-lit document"
-        )
+        score = max(score, 80)
 
     if not reasons and not escalations:
         reasons.append(
@@ -688,10 +729,116 @@ def calculate_fraud_score(
     for escalation in escalations:
         _add_reason(reasons, escalation)
 
-    risk_level = (
-        "Unreliable Scan"
-        if quality_rejection and not strong_non_quality_evidence
-        else _risk_level(score)
+    quality_status = document_quality_result.get("quality_status")
+
+    if not quality_status:
+        if quality_rejection:
+            quality_status = "unprocessable"
+        elif quality_score < 45:
+            quality_status = "bad"
+        elif quality_score < 65:
+            quality_status = "warning"
+        else:
+            quality_status = "good"
+
+    physical_damage_score = float(
+        document_quality_result.get("physical_damage_score", 0)
+        or document_quality_result.get("damage_score", 0)
+        or 0
+    )
+    fold_tear_score = float(
+        document_quality_result.get("fold_tear_score", 0)
+        or 0
+    )
+    quality_badge = None
+    quality_notice = None
+
+    if quality_status == "unprocessable":
+        quality_badge = "Unprocessable Document"
+        quality_notice = (
+            "The upload is too blurred, cropped, damaged, or unreadable for "
+            "reliable automated verification."
+        )
+    elif max(physical_damage_score, fold_tear_score) >= 65:
+        quality_badge = "Unclear Document"
+        quality_notice = (
+            "The document was analyzed, but visible physical damage, folds, "
+            "tears, or wrinkles may reduce confidence in some detector signals."
+        )
+    elif quality_status in {"warning", "bad"}:
+        quality_badge = "Quality Warning"
+        quality_notice = (
+            "The document was analyzed, but image quality may reduce confidence "
+            "in some detector signals."
+        )
+
+    authenticity_score = float(
+        document_authenticity_result.get("authenticity_score", 100)
+        or 0
+    )
+    high_threshold = 50
+
+    if quality_status == "unprocessable":
+        result_status = "unprocessable"
+        rejection_reason_type = "quality"
+        risk_level = "Analysis Inconclusive"
+        status = "unprocessable"
+        banner_title = "Document could not be analyzed reliably."
+        banner_body = "The upload is too blurred, cropped, damaged, or unreadable for reliable automated verification."
+
+    elif (
+        synthetic_detected
+        or synthetic_score_raw >= 65
+        or authenticity_score <= 40
+    ):
+        result_status = "synthetic_suspected"
+        rejection_reason_type = "authenticity"
+        risk_level = "Synthetic Document Suspected"
+        status = "synthetic_suspected"
+        banner_title = "Document authenticity concern detected."
+        banner_body = "The document is clear enough to analyze, but authenticity checks suggest it may be AI-generated, synthetic, or digitally fabricated."
+
+    elif score >= high_threshold:
+        result_status = "fraud_suspected"
+        rejection_reason_type = "fraud"
+        risk_level = "High Risk"
+        status = "fraud_suspected"
+        banner_title = "Fraud indicators detected."
+        banner_body = "The document contains suspicious evidence that may indicate tampering or fraud."
+
+    elif quality_status in {"warning", "bad"}:
+        result_status = "quality_warning"
+        rejection_reason_type = None
+        risk_level = _fraud_risk_level(score)
+        status = "quality_warning"
+        banner_title = "No major fraud indicators detected."
+        banner_body = "The document was analyzed successfully. Any quality concerns are shown separately and did not override the fraud or authenticity result."
+
+    else:
+        result_status = "passed"
+        rejection_reason_type = None
+        risk_level = _fraud_risk_level(score)
+        status = "success"
+        banner_title = "No major fraud indicators detected."
+        banner_body = "The document passed the available automated checks."
+
+    analysis_confidence = int(
+        document_quality_result.get(
+            "analysis_confidence",
+            0 if quality_status == "unprocessable" else 100
+        )
+    )
+    quality_warning = bool(
+        document_quality_result.get(
+            "quality_warning",
+            quality_status in {"warning", "bad"}
+        )
+    )
+    quality_reliable = bool(
+        document_quality_result.get(
+            "quality_reliable",
+            quality_status != "unprocessable"
+        )
     )
 
     print("\n===== FRAUD SCORE =====")
@@ -708,6 +855,16 @@ def calculate_fraud_score(
         "fraud_score": score,
         "risk_level": risk_level,
         "status": status,
+        "result_status": result_status,
+        "rejection_reason_type": rejection_reason_type,
+        "banner_title": banner_title,
+        "banner_body": banner_body,
+        "quality_status": quality_status,
+        "analysis_confidence": analysis_confidence,
+        "quality_reliable": quality_reliable,
+        "quality_warning": quality_warning,
+        "quality_badge": quality_badge,
+        "quality_notice": quality_notice,
         "reasons": reasons,
         "components": components,
         "detector_contributions": detector_contributions,

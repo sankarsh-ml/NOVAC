@@ -161,6 +161,50 @@ body {
     0 0 20px rgba(139,92,246,.4);
 }
 
+.analysis-progress-card {
+  margin: 24px auto 0;
+  max-width: 520px;
+  text-align: left;
+  background: rgba(15,23,42,.72);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.analysis-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: #e2e8f0;
+  font-weight: 700;
+}
+
+.analysis-progress-track {
+  height: 10px;
+  margin: 12px 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148,163,184,.22);
+}
+
+.analysis-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  transition: width .25s ease;
+}
+
+.analysis-progress-card p {
+  margin: 0;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.analysis-progress-error {
+  margin-top: 8px !important;
+  color: #fecaca !important;
+}
+
 .features-grid {
 
   width: 100%;

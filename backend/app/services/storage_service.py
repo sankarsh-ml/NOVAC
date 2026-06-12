@@ -20,3 +20,15 @@ def save_analysis(result: dict):
     analysis_collection.insert_one(document)
 
     return case_id
+
+
+def update_analysis_fields(case_id: str, fields: dict):
+
+    analysis_collection.update_one(
+        {
+            "case_id": case_id
+        },
+        {
+            "$set": fields
+        }
+    )

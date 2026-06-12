@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+import logging
 
 from app.api.upload import router as upload_router
 from app.api.results import router as results_router
@@ -8,6 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.report import router as report_router
 
 from fastapi.staticfiles import StaticFiles
+
+from app.services.forgery_localization_service import stop_forgery_localization_worker
+from app.services.tampering_runner import stop_tampering_worker
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
 
 
 app = FastAPI(
@@ -39,3 +48,9 @@ app.mount(
 @app.get("/")
 def home():
     return {"message": "API Running"}
+
+
+@app.on_event("shutdown")
+def shutdown_workers():
+    stop_forgery_localization_worker()
+    stop_tampering_worker()

@@ -14,6 +14,7 @@ function UploadForm() {
 
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [progressStatus, setProgressStatus] = useState(null);
   const navigate = useNavigate();
 
   async function handleUpload() {
@@ -22,6 +23,11 @@ function UploadForm() {
       alert("Please select a file");
       return;
     }
+
+    const wait = (milliseconds) =>
+      new Promise((resolve) =>
+        setTimeout(resolve, milliseconds)
+      );
 
     try {
 
@@ -34,8 +40,14 @@ function UploadForm() {
         file
       );
 
-      const response = await API.post(
-        "/upload",
+      setProgressStatus({
+        stage: "Upload received",
+        progress: 5,
+        message: "Starting analysis"
+      });
+
+      const startResponse = await API.post(
+        "/analyze/start",
         formData,
         {
           headers: {
@@ -45,17 +57,41 @@ function UploadForm() {
         }
       );
 
-      alert(
-        "Analysis completed successfully!"
-      );
+      const caseId = startResponse.data?.case_id;
+
+      if (!caseId) {
+        throw new Error("Analysis did not return a case ID");
+      }
+
+      while (true) {
+        await wait(1000);
+
+        let statusResponse = null;
+
+        try {
+          statusResponse = await API.get(
+            `/analysis/status/${caseId}`
+          );
+        } catch {
+          // Status may not exist during the first few milliseconds.
+          continue;
+        }
+
+        setProgressStatus(statusResponse.data);
+
+        if (statusResponse.data?.error) {
+          throw new Error(statusResponse.data.error);
+        }
+
+        if (statusResponse.data?.stage === "Analysis complete") {
+          break;
+        }
+      }
 
       setFile(null);
-
-      if (response.data?.case_id) {
-        navigate(
-          `/result/${response.data.case_id}`
-        );
-      }
+      navigate(
+        `/results/case/${caseId}`
+      );
 
     } catch (error) {
 
@@ -130,6 +166,29 @@ function UploadForm() {
             : "Analyze Document"}
 
         </button>
+
+        {loading && progressStatus && (
+          <div className="analysis-progress-card">
+            <div className="analysis-progress-head">
+              <span>{progressStatus.stage}</span>
+              <strong>{progressStatus.progress}%</strong>
+            </div>
+            <div className="analysis-progress-track">
+              <div
+                className="analysis-progress-fill"
+                style={{
+                  width: `${progressStatus.progress}%`
+                }}
+              />
+            </div>
+            <p>{progressStatus.message}</p>
+            {progressStatus.error && (
+              <p className="analysis-progress-error">
+                {progressStatus.error}
+              </p>
+            )}
+          </div>
+        )}
 
       </div>
 

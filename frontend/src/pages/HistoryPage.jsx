@@ -69,12 +69,14 @@ function HistoryPage() {
     results.filter(
       r =>
         r.risk_level === "Critical"
+        || r.risk_level === "Synthetic Document Suspected"
     ).length;
 
   const highCount =
     results.filter(
       r =>
         r.risk_level === "High"
+        || r.risk_level === "High Risk"
     ).length;
 
   const averageScore =
@@ -246,7 +248,7 @@ function HistoryPage() {
                             );
 
                             navigate(
-                              `/result/${result.case_id}`
+                              `/results/case/${result.case_id}`
                             );
                           }}
                         >

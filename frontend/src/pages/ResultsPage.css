@@ -37,6 +37,27 @@
   margin-top: 10px;
 }
 
+.badge-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.quality-badge {
+  display: inline-flex;
+  justify-content: center;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: rgba(250,204,21,.16);
+  border: 1px solid rgba(250,204,21,.4);
+  color: #fde68a;
+  font-size: .85rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
 .gauge-card {
   background: rgba(30,41,59,.8);
   border-radius: 20px;
@@ -63,6 +84,27 @@
 .reliability-banner p {
   margin: 0;
   color: #fde68a;
+  line-height: 1.5;
+}
+
+.quality-notice-banner {
+  margin-bottom: 30px;
+  padding: 18px 22px;
+  border: 1px solid rgba(96,165,250,.35);
+  border-left: 5px solid #60a5fa;
+  border-radius: 14px;
+  background: rgba(30,64,175,.24);
+}
+
+.quality-notice-banner h2 {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+  color: #dbeafe;
+}
+
+.quality-notice-banner p {
+  margin: 0;
+  color: #bfdbfe;
   line-height: 1.5;
 }
 

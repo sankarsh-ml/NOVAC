@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from pathlib import Path
 
 import cv2
@@ -17,6 +18,30 @@ OCR_VARIANT_DIR.mkdir(
     parents=True,
     exist_ok=True
 )
+
+OCR_MAX_SIDE = 1800
+OCR_MAX_CANDIDATES = 4
+OCR_UPSCALE_SMALL_SIDE_THRESHOLD = 900
+
+
+def _ocr_candidate_name(image_path):
+    name = Path(image_path).stem
+
+    for suffix in [
+        "clahe_upscaled_2x",
+        "sharpened_upscaled_2x",
+        "upscaled_2x",
+        "ocr_input",
+        "sharpened",
+        "denoised",
+        "adaptive",
+        "clahe",
+        "gray"
+    ]:
+        if name.endswith(f"_{suffix}"):
+            return suffix
+
+    return name
 
 
 def _normalize_text(text):
@@ -294,7 +319,69 @@ def _write_variant(image_path, suffix, image):
     return str(output)
 
 
-def _variant_paths(image_path):
+def _resize_to_max_side(image, max_side=OCR_MAX_SIDE):
+    height, width = image.shape[:2]
+    largest_side = max(width, height)
+
+    if largest_side <= max_side:
+        return image
+
+    scale = max_side / float(largest_side)
+
+    return cv2.resize(
+        image,
+        (
+            int(width * scale),
+            int(height * scale)
+        ),
+        interpolation=cv2.INTER_AREA
+    )
+
+
+def _prepare_ocr_input(image_path):
+    """
+    Caps very large uploads before OCR to avoid repeated expensive inference.
+    """
+
+    image = cv2.imread(image_path)
+
+    if image is None:
+        return image_path
+
+    resized = _resize_to_max_side(
+        image
+    )
+
+    if resized.shape[:2] == image.shape[:2]:
+        return image_path
+
+    return _write_variant(
+        image_path,
+        "ocr_input",
+        resized
+    )
+
+
+def _is_very_small_image(image_path):
+    image = cv2.imread(image_path)
+
+    if image is None:
+        return False
+
+    height, width = image.shape[:2]
+
+    return max(width, height) < OCR_UPSCALE_SMALL_SIDE_THRESHOLD
+
+
+def _should_try_upscaled_variants(original_result, image_path):
+    return (
+        _is_very_small_image(image_path)
+        or len(original_result.get("text", "")) < 15
+        or original_result.get("avg_confidence", 0) < 0.55
+    )
+
+
+def _variant_paths(image_path, include_upscaled=False, limit=None):
     """
     Creates OCR preprocessing variants.
 
@@ -314,44 +401,31 @@ def _variant_paths(image_path):
 
     variants = []
 
-    # 2x upscale usually helps small document text.
-    upscaled = cv2.resize(
-        gray,
-        None,
-        fx=2,
-        fy=2,
-        interpolation=cv2.INTER_CUBIC
-    )
-    variants.append(
-        _write_variant(
-            image_path,
-            "upscaled_2x",
-            upscaled
-        )
-    )
+    def has_capacity():
+        return limit is None or len(variants) < limit
 
-    variants.append(
-        _write_variant(
-            image_path,
-            "gray",
-            gray
-        )
-    )
+    def add_variant(suffix, variant_image):
+        if not has_capacity():
+            return False
 
-    denoised = cv2.fastNlMeansDenoising(
-        gray,
-        None,
-        10,
-        7,
-        21
-    )
-    variants.append(
-        _write_variant(
-            image_path,
-            "denoised",
-            denoised
+        variants.append(
+            _write_variant(
+                image_path,
+                suffix,
+                variant_image
+            )
         )
-    )
+
+        return True
+
+    if not add_variant(
+        "gray",
+        gray
+    ):
+        return variants
+
+    if not has_capacity():
+        return variants
 
     clahe = cv2.createCLAHE(
         clipLimit=2.0,
@@ -360,28 +434,15 @@ def _variant_paths(image_path):
     enhanced = clahe.apply(
         gray
     )
-    variants.append(
-        _write_variant(
-            image_path,
-            "clahe",
-            enhanced
-        )
-    )
 
-    clahe_upscaled = cv2.resize(
-        enhanced,
-        None,
-        fx=2,
-        fy=2,
-        interpolation=cv2.INTER_CUBIC
-    )
-    variants.append(
-        _write_variant(
-            image_path,
-            "clahe_upscaled_2x",
-            clahe_upscaled
-        )
-    )
+    if not add_variant(
+        "clahe",
+        enhanced
+    ):
+        return variants
+
+    if not has_capacity():
+        return variants
 
     sharpened = cv2.addWeighted(
         gray,
@@ -390,28 +451,32 @@ def _variant_paths(image_path):
         -0.6,
         0
     )
-    variants.append(
-        _write_variant(
-            image_path,
-            "sharpened",
-            sharpened
-        )
+
+    if not add_variant(
+        "sharpened",
+        sharpened
+    ):
+        return variants
+
+    if not has_capacity():
+        return variants
+
+    denoised = cv2.fastNlMeansDenoising(
+        gray,
+        None,
+        10,
+        7,
+        21
     )
 
-    sharpened_upscaled = cv2.resize(
-        sharpened,
-        None,
-        fx=2,
-        fy=2,
-        interpolation=cv2.INTER_CUBIC
-    )
-    variants.append(
-        _write_variant(
-            image_path,
-            "sharpened_upscaled_2x",
-            sharpened_upscaled
-        )
-    )
+    if not add_variant(
+        "denoised",
+        denoised
+    ):
+        return variants
+
+    if not has_capacity():
+        return variants
 
     thresholded = cv2.adaptiveThreshold(
         enhanced,
@@ -421,22 +486,69 @@ def _variant_paths(image_path):
         31,
         8
     )
-    variants.append(
-        _write_variant(
-            image_path,
-            "adaptive",
-            thresholded
+
+    if not add_variant(
+        "adaptive",
+        thresholded
+    ):
+        return variants
+
+    if include_upscaled and has_capacity():
+        upscaled = cv2.resize(
+            gray,
+            None,
+            fx=2,
+            fy=2,
+            interpolation=cv2.INTER_CUBIC
         )
-    )
+
+        if not add_variant(
+            "upscaled_2x",
+            upscaled
+        ):
+            return variants
+
+        if not has_capacity():
+            return variants
+
+        clahe_upscaled = cv2.resize(
+            enhanced,
+            None,
+            fx=2,
+            fy=2,
+            interpolation=cv2.INTER_CUBIC
+        )
+
+        if not add_variant(
+            "clahe_upscaled_2x",
+            clahe_upscaled
+        ):
+            return variants
+
+        if not has_capacity():
+            return variants
+
+        sharpened_upscaled = cv2.resize(
+            sharpened,
+            None,
+            fx=2,
+            fy=2,
+            interpolation=cv2.INTER_CUBIC
+        )
+
+        add_variant(
+            "sharpened_upscaled_2x",
+            sharpened_upscaled
+        )
 
     return variants
 
 
-def _run_ocr(image_path):
+def _run_ocr(image_path, use_cls=False):
 
     result = ocr.ocr(
         image_path,
-        cls=True
+        cls=use_cls
     )
 
     return _parse_ocr_result(
@@ -444,15 +556,33 @@ def _run_ocr(image_path):
     )
 
 
+def _run_timed_ocr(image_path, candidate_name, use_cls=False):
+    started_at = time.perf_counter()
+
+    try:
+        return _run_ocr(
+            image_path,
+            use_cls=use_cls
+        )
+
+    finally:
+        elapsed = time.perf_counter() - started_at
+        print(f"OCR candidate {candidate_name} took {elapsed:.2f} seconds")
+
+
 def _is_weak_ocr(result):
     """
     Decides whether to try extra OCR variants.
     """
 
+    return not _is_good_enough_ocr(result)
+
+
+def _is_good_enough_ocr(result):
     return (
-        result.get("avg_confidence", 0) < 0.86
-        or len(result.get("lines", [])) < 4
-        or len(result.get("text", "")) < 40
+        result.get("avg_confidence", 0) >= 0.75
+        and len(result.get("lines", [])) >= 3
+        and len(result.get("text", "")) >= 25
     )
 
 
@@ -475,8 +605,14 @@ def extract_text(image_path):
     candidates_tested = 1
 
     try:
-        original_result = _run_ocr(
+        ocr_input_path = _prepare_ocr_input(
             image_path
+        )
+
+        original_result = _run_timed_ocr(
+            ocr_input_path,
+            "original",
+            use_cls=True
         )
     except Exception as exc:
         return {
@@ -494,13 +630,43 @@ def extract_text(image_path):
         "ocr_variant": "original"
     }
 
+    if _is_good_enough_ocr(best_result):
+        best_result["text"] = "\n".join(
+            _normalize_text(line)
+            for line in best_result.get("text", "").splitlines()
+            if _normalize_text(line)
+        )
+
+        best_result["ocr_engine"] = "paddleocr"
+        best_result["ocr_candidates_tested"] = candidates_tested
+        best_result["ocr_warning"] = None
+
+        return best_result
+
     if _is_weak_ocr(best_result):
-        for variant_path in _variant_paths(image_path):
+        include_upscaled = _should_try_upscaled_variants(
+            best_result,
+            ocr_input_path
+        )
+
+        for variant_path in _variant_paths(
+            ocr_input_path,
+            include_upscaled=include_upscaled,
+            limit=OCR_MAX_CANDIDATES - candidates_tested
+        ):
+            if candidates_tested >= OCR_MAX_CANDIDATES:
+                break
+
             try:
                 candidates_tested += 1
-
-                variant_result = _run_ocr(
+                candidate_name = _ocr_candidate_name(
                     variant_path
+                )
+
+                variant_result = _run_timed_ocr(
+                    variant_path,
+                    candidate_name,
+                    use_cls=False
                 )
 
                 variant_result["ocr_variant"] = os.path.basename(
@@ -509,6 +675,12 @@ def extract_text(image_path):
 
                 if _quality_score(variant_result) > _quality_score(best_result):
                     best_result = variant_result
+
+                if _is_good_enough_ocr(variant_result):
+                    if not _is_good_enough_ocr(best_result):
+                        best_result = variant_result
+
+                    break
 
             except Exception:
                 continue
