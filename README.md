@@ -1,8 +1,8 @@
-# NOVAC FAKE DOCUMENT AI
+# NOVAC FAKE DOCUMENT AI 
 
-NOVAC FAKE DOCUMENT AI is an AI-powered document fraud detection and authenticity analysis system. It verifies uploaded documents using OCR, document quality checks, AI/synthetic document detection, forensic localization, visual tampering detection, text consistency checks, and automated PDF investigation reports.
+NOVAC FAKE DOCUMENT AI is an AI-powered document fraud detection and authenticity analysis system. It analyzes uploaded documents using OCR, document quality checks, masked-field detection, AI/synthetic document detection, ELA, MVSS, TruFor, text consistency checks, and automated PDF investigation reports.
 
-The system is designed to analyze documents such as Aadhaar cards, PAN cards, ID documents, certificates, and scanned PDFs, then return a structured fraud risk assessment with visual evidence and extracted fields.
+The system is designed for documents such as Aadhaar cards, PAN cards, ID cards, certificates, and scanned PDFs.
 
 ---
 
@@ -11,18 +11,18 @@ The system is designed to analyze documents such as Aadhaar cards, PAN cards, ID
 * Document upload and analysis
 * OCR-based text extraction using PaddleOCR
 * Structured field extraction for Aadhaar, PAN, and similar ID documents
+* Masked-field and hidden-field detection
 * Document quality analysis for blur, glare, folds, creases, wrinkles, and readability
 * AI-generated / synthetic document detection
-* Masked-field and hidden-field detection
 * ELA-based compression consistency analysis
-* TruFor-based forgery localization
 * MVSS-based visual tampering detection
+* TruFor-based forgery localization
 * Text consistency and field mismatch detection
 * Suspicious region visualization
-* Real-time progress tracking during analysis
+* Backend-driven progress tracking
 * MongoDB-backed result storage and history
 * Professional PDF investigation report generation
-* Frontend dashboard for upload, results, history, and report download
+* React frontend for upload, results, history, and report download
 
 ---
 
@@ -75,204 +75,174 @@ novac/
 
 ---
 
-## Main Analysis Pipeline
+## How NOVAC Works
 
-NOVAC processes each uploaded document through the following stages:
+NOVAC separates document analysis into three major areas:
+
+1. **Document quality**
+   Checks whether the image is clear enough for analysis.
+
+2. **Document authenticity**
+   Checks whether the document appears real, synthetic, AI-generated, or digitally fabricated.
+
+3. **Fraud / tampering evidence**
+   Uses forensic detectors and text checks to identify suspicious regions or inconsistencies.
+
+This separation prevents quality problems, authenticity issues, and fraud indicators from being incorrectly treated as the same type of failure.
+
+---
+
+## Parallel Analysis Pipeline
+
+NOVAC uses a parallelized analysis flow to reduce total runtime while still keeping the main forensic detectors in the pipeline.
+
+MVSS is one of the slowest stages, so it is started early in the background. While MVSS is running, the backend continues with other independent checks such as OCR, document quality, authenticity, ELA, and text consistency.
+
+### Normal Pipeline Flow
 
 ```txt
 Upload received
 ↓
-File preparation
+Prepare file and shared preprocessing
 ↓
-PDF text extraction / PDF rendering
+Start MVSS in background
 ↓
-OCR extraction
+Run OCR while MVSS continues
 ↓
-Structured field matching
+Run masked-field detection
 ↓
-Masked-field detection
+Run document quality analysis
 ↓
-Document quality analysis
+Run document authenticity / AI detection
 ↓
-Document authenticity / synthetic detection
+Run ELA analysis
 ↓
-ELA analysis
+Run text consistency analysis
 ↓
-MVSS visual tampering analysis
+Check decisive early signals
 ↓
-TruFor forgery localization
-↓
-Text consistency analysis
-↓
-Detector fusion
-↓
-Final risk calculation
-↓
-MongoDB result storage
-↓
-PDF report generation on request
+If no decisive signal:
+    wait for MVSS result
+    run TruFor
+    combine all detector results
+    calculate final risk
+    save result
+    complete analysis
 ```
 
----
+### Decisive-Signal Shortcut Flow
 
-## Detector Modules
+If NOVAC detects an obvious decisive issue early, it avoids unnecessary deep forensic processing.
 
-### 1. OCR and Structured Field Extraction
+Decisive conditions include:
 
-The OCR module extracts text from images and scanned documents. The post-processing layer converts raw OCR lines into structured fields.
+* Masked or hidden critical fields
+* Poor / bad / unprocessable document quality
+* AI-generated / synthetic document detection
 
-Supported structured fields include:
-
-* Document type
-* Name
-* Date of birth
-* Gender
-* Aadhaar number
-* VID
-* PAN number
-* Father's name
-* Address
-* Enrolment number
-* Issue date
-
-Raw OCR lines are cleaned and filtered before being displayed in the final report.
-
----
-
-### 2. Document Quality Analysis
-
-The quality module checks whether the uploaded document is clear enough for automated analysis.
-
-It detects:
-
-* Severe blur
-* Glare or overexposure
-* Low resolution
-* Physical folds
-* Creases
-* Wrinkles
-* Torn or damaged document regions
-* Unclear document boundaries
-
-Document quality is treated separately from fraud risk. A document can be high risk due to fraud, or simply unclear due to quality issues.
-
----
-
-### 3. Document Authenticity and Synthetic Detection
-
-This module checks whether the document appears authentic or AI-generated.
-
-It detects:
-
-* Synthetic / AI-generated documents
-* Overly clean fake templates
-* Placeholder-like ID numbers
-* Weak camera or print acquisition traces
-* Suspicious digital composition
-* Official digital PDF structure when applicable
-
-Official digital PDFs are handled separately so that clean PDF rendering is not incorrectly treated as AI-generated.
-
----
-
-### 4. Masked Field Detection
-
-The masking module detects hidden or masked critical fields, such as masked Aadhaar numbers or covered document identifiers.
-
-Examples:
+In these cases:
 
 ```txt
-XXXX XXXX XXXX
-**** **** ****
-xxxxxxxxxxxx
+Start MVSS in background
+↓
+Run early checks
+↓
+Decisive issue detected
+↓
+Cancel or ignore MVSS result
+↓
+Skip TruFor
+↓
+Calculate final result using decisive evidence
+↓
+Save result
+↓
+Complete analysis
 ```
 
-Masked fields are highlighted in the annotated image when the image is otherwise analyzable.
+This means MVSS and TruFor are still part of the normal full analysis path, but they are not wasted on documents that already have a clear rejection/escalation reason.
 
 ---
 
-### 5. ELA Analysis
+## Detector Execution Logic
 
-ELA checks image compression consistency and helps identify suspicious edited regions based on abnormal compression artifacts.
+### MVSS
 
----
+MVSS is started early in the background because it is one of the slowest stages.
 
-### 6. TruFor Forgery Localization
+MVSS can be:
 
-TruFor is used for image forgery localization. It identifies possible manipulated regions in the uploaded document image.
+* Completed normally
+* Served from detector cache
+* Cancelled due to a decisive early signal
+* Marked as skipped/cancelled if no longer needed
 
-The system includes:
+A skipped detector is **not** treated as a clean pass.
 
-* Persistent model loading
-* Detector result caching
-* Timeout handling
-* Detailed timing logs
-* Standalone runtime test support
-
----
-
-### 7. MVSS Visual Tampering Detection
-
-MVSS is used for visual tampering detection. It is kept in a separate environment because it may require specific PyTorch dependencies.
-
-The system includes:
-
-* Separate `mvss_venv`
-* CPU-safe MVSS execution
-* Persistent worker reuse
-* Detector result caching
-* Timeout handling
-* Progress updates during long inference
-
----
-
-## Final Result Logic
-
-NOVAC separates the final result into independent signals:
-
-* Fraud risk
-* Document authenticity
-* Document quality
-* Detector evidence
-* Suspicious regions
-
-This prevents one signal from incorrectly overriding all others.
-
-Example:
-
-```txt
-Risk Level: High Risk
-Quality Badge: Unclear Document
-```
-
-This means the document has fraud indicators, while also having quality issues.
-
----
-
-## Decisive Early Signals
-
-If the system detects a decisive issue early, it avoids unnecessary deep forensic processing.
-
-Deep detectors such as MVSS and TruFor can be skipped or cancelled when:
-
-* Masked critical fields are detected
-* Document quality is poor or unprocessable
-* AI-generated / synthetic document is detected
-
-Skipped detectors are marked clearly as skipped, not treated as clean passes.
-
-Example skipped detector output:
+Example skipped MVSS output:
 
 ```json
 {
   "enabled": true,
   "completed": false,
   "skipped": true,
+  "cancelled": true,
   "skip_reason": "synthetic_detected",
+  "score": null,
+  "suspicious_regions": [],
+  "status": "cancelled_due_to_decisive_signal"
+}
+```
+
+### TruFor
+
+TruFor runs after MVSS only if no decisive early signal is found.
+
+TruFor is skipped when:
+
+* Synthetic document is detected
+* Masked critical fields are detected
+* Document quality is poor or unprocessable
+
+Example skipped TruFor output:
+
+```json
+{
+  "enabled": true,
+  "completed": false,
+  "skipped": true,
+  "cancelled": false,
+  "skip_reason": "poor_quality",
   "score": null,
   "suspicious_regions": [],
   "status": "skipped_due_to_decisive_signal"
 }
+```
+
+---
+
+## Main Analysis Stages
+
+```txt
+1. Upload received
+2. File preparation
+3. PDF text extraction / PDF rendering
+4. Shared preprocessing
+5. MVSS starts in background
+6. OCR extraction
+7. Structured field matching
+8. Masked-field detection
+9. Document quality analysis
+10. Document authenticity / synthetic detection
+11. ELA analysis
+12. Text consistency analysis
+13. Decisive-signal check
+14. MVSS completion or cancellation
+15. TruFor analysis, if required
+16. Detector fusion
+17. Final risk calculation
+18. MongoDB result storage
+19. PDF report generation on request
 ```
 
 ---
@@ -292,9 +262,9 @@ Example response:
 ```json
 {
   "case_id": "NOVAC-D03C6239",
-  "stage": "Running OCR",
+  "stage": "Running OCR while MVSS continues",
   "progress": 35,
-  "message": "Extracting readable text from the document",
+  "message": "Extracting readable text while MVSS runs in background.",
   "complete": false,
   "error": null
 }
@@ -305,15 +275,18 @@ Common progress stages:
 ```txt
 Upload received
 Preparing file
-Extracting PDF text
-Rendering PDF page
-Running OCR
+Preparing MVSS input
+Running MVSS in background
+Running OCR while MVSS continues
 Checking document quality
 Checking document authenticity
 Running ELA analysis
-Running MVSS analysis
-Running TruFor analysis
 Running text consistency analysis
+Checking decisive early signals
+Cancelling MVSS analysis
+Skipping TruFor analysis
+Waiting for MVSS result
+Running TruFor analysis
 Combining detector results
 Calculating final risk
 Saving result
@@ -322,9 +295,176 @@ Analysis complete
 
 ---
 
+## Detector Modules
+
+### OCR and Structured Field Extraction
+
+The OCR module extracts text from uploaded document images and PDFs. OCR output is cleaned and converted into structured fields.
+
+Supported structured fields include:
+
+* Document type
+* Name
+* Date of birth
+* Gender
+* Aadhaar number
+* VID
+* PAN number
+* Father’s name
+* Address
+* Enrolment number
+* Issue date
+
+Raw OCR dumps are hidden from the final report by default.
+
+---
+
+### Masked-Field Detection
+
+The masking module detects hidden or masked critical fields.
+
+Examples:
+
+```txt
+XXXX XXXX XXXX
+**** **** ****
+xxxxxxxxxxxx
+```
+
+If masking is detected, NOVAC highlights the masked field region in the annotated image, provided the document itself is clear enough for annotation.
+
+---
+
+### Document Quality Analysis
+
+The quality module checks whether the uploaded document is clear and reliable enough for automated analysis.
+
+It detects:
+
+* Severe blur
+* Glare
+* Overexposure
+* Low resolution
+* Physical folds
+* Creases
+* Wrinkles
+* Torn or damaged regions
+* Poor readability
+
+Poor quality is handled separately from fraud risk.
+
+Example:
+
+```txt
+Risk Level: High Risk
+Quality Badge: Unclear Document
+```
+
+This means the document has fraud indicators and also has quality issues.
+
+---
+
+### Document Authenticity and Synthetic Detection
+
+This module checks whether a document appears real or synthetic.
+
+It detects:
+
+* AI-generated documents
+* Synthetic templates
+* Placeholder ID patterns
+* Weak camera or print acquisition traces
+* Suspicious digital composition
+* Official digital PDF structure
+
+Official digital PDFs are treated separately so that clean digital rendering is not incorrectly treated as AI-generated.
+
+---
+
+### ELA Analysis
+
+ELA checks compression consistency and helps identify suspicious editing artifacts.
+
+---
+
+### MVSS Visual Tampering Detection
+
+MVSS detects visual tampering and manipulated regions.
+
+NOVAC runs MVSS in a separate environment because MVSS may require dependency versions different from the main backend.
+
+MVSS includes:
+
+* Separate `mvss_venv`
+* CPU-safe execution
+* Persistent worker reuse
+* Detector result caching
+* Cancellation support
+* Timeout protection
+* Progress updates
+
+---
+
+### TruFor Forgery Localization
+
+TruFor detects possible forged or manipulated image regions.
+
+NOVAC includes:
+
+* Persistent model loading
+* Detector result caching
+* Timeout handling
+* Runtime debugging scripts
+* Detailed timing logs
+
+TruFor is only run when the document has not already been decisively flagged by early checks.
+
+---
+
+## Final Result Logic
+
+NOVAC keeps separate fields for:
+
+* Fraud score
+* Risk level
+* Document authenticity
+* Document quality
+* Quality badge
+* Detector evidence
+* Suspicious regions
+* Final verdict
+
+Important behavior:
+
+```txt
+AI-generated document:
+    Fraud Score = 100
+    Deep detectors skipped/cancelled
+    No region annotation required
+
+Poor-quality document:
+    Fraud Score = 50
+    Quality badge shown
+    Deep detectors skipped/cancelled
+    No region annotation required
+
+Masked-field document:
+    Masked field is annotated
+    Deep detectors skipped/cancelled if masking is decisive
+
+Normal document:
+    MVSS completes
+    TruFor runs
+    Full detector fusion is performed
+```
+
+---
+
 ## PDF Reports
 
-NOVAC generates professional investigation reports containing:
+NOVAC generates professional PDF investigation reports.
+
+Reports include:
 
 * Case ID
 * File name
@@ -336,13 +476,16 @@ NOVAC generates professional investigation reports containing:
 * Quality badge
 * Key findings
 * Detector summary
-* Suspicious regions
+* Suspicious regions, when applicable
 * Structured extracted fields
+* Possible detected values
 * Cleaned extracted text
 * Final verdict
 * Disclaimer
 
-Raw OCR dumps are hidden by default to keep the report clean. Debug OCR details can be enabled separately if needed.
+The report does **not** show raw OCR dumps by default.
+
+Raw OCR details can be enabled only in debug mode.
 
 ---
 
@@ -350,9 +493,21 @@ Raw OCR dumps are hidden by default to keep the report clean. Debug OCR details 
 
 NOVAC uses multiple Python environments because some forensic models require different dependency versions.
 
+---
+
 ### 1. Main Backend Environment
 
-The main backend environment runs FastAPI, OCR, MongoDB, PDF handling, document quality, authenticity analysis, ELA, report generation, and service orchestration.
+The main backend environment runs:
+
+* FastAPI
+* OCR
+* MongoDB integration
+* PDF handling
+* document quality checks
+* authenticity checks
+* ELA
+* report generation
+* pipeline orchestration
 
 ```bat
 cd /d D:\novac
@@ -361,19 +516,19 @@ venv\Scripts\activate
 pip install -r backend\requirements.txt
 ```
 
-If a requirements file is incomplete, install the common packages manually:
+If the requirements file is incomplete, install common backend packages manually:
 
 ```bat
 pip install fastapi uvicorn python-multipart pymongo python-dotenv opencv-python numpy pillow pymupdf reportlab paddleocr paddlepaddle
 ```
 
-Run a compile check:
+Compile check:
 
 ```bat
 python -m compileall backend\app backend\scripts
 ```
 
-Start the backend:
+Start backend:
 
 ```bat
 cd /d D:\novac
@@ -381,7 +536,7 @@ venv\Scripts\activate
 uvicorn backend.app.main:app --reload
 ```
 
-Alternative backend start command:
+Alternative:
 
 ```bat
 cd /d D:\novac\backend
@@ -399,7 +554,7 @@ http://127.0.0.1:8000
 
 ### 2. MVSS Environment
 
-MVSS runs in its own environment to avoid dependency conflicts.
+MVSS runs in its own environment.
 
 ```bat
 cd /d D:\novac
@@ -407,7 +562,7 @@ python -m venv mvss_venv
 mvss_venv\Scripts\activate
 ```
 
-Install MVSS dependencies according to the MVSS-Net requirements:
+Install MVSS dependencies:
 
 ```bat
 pip install -r backend\MVSS-Net\requirements.txt
@@ -424,8 +579,6 @@ Run MVSS runtime test if available:
 ```bat
 python backend\scripts\test_mvss_cpu_runtime.py
 ```
-
-MVSS currently runs CPU-safe by default for compatibility.
 
 ---
 
@@ -448,9 +601,9 @@ The frontend communicates with the backend for:
 
 ---
 
-### 4. Environment Variables
+## Environment Variables
 
-Create a `.env` file in the expected backend/project location.
+Create a `.env` file in the expected backend or project location.
 
 Example:
 
@@ -471,9 +624,15 @@ PARALLEL_DETECTORS=false
 
 ## MongoDB
 
-MongoDB is used to store analysis results, case history, progress status, and report metadata.
+MongoDB is used for:
 
-Make sure MongoDB is running before starting the backend.
+* Case results
+* Analysis history
+* Progress status
+* Report metadata
+* Detector outputs
+
+Make sure MongoDB is running before starting backend analysis.
 
 ---
 
@@ -498,7 +657,7 @@ npm run dev
 
 ## Runtime Health Checks
 
-Check backend imports:
+Check backend runtime:
 
 ```bat
 venv\Scripts\activate
@@ -555,12 +714,10 @@ Large model weights and checkpoints should not be committed unless the repositor
 
 ## Example Output
 
-NOVAC returns a structured result containing:
-
 ```json
 {
   "case_id": "NOVAC-XXXXXXX",
-  "fraud_score": 80,
+  "fraud_score": 100,
   "risk_level": "Synthetic Document Suspected",
   "result_status": "synthetic_suspected",
   "document_quality": {
@@ -572,8 +729,9 @@ NOVAC returns a structured result containing:
     "synthetic_score": 100,
     "authenticity_score": 0
   },
-  "detector_results": {},
-  "suspicious_regions": [],
+  "deep_detectors_skipped": true,
+  "deep_skip_reason": "synthetic_detected",
+  "skipped_detectors": ["mvss", "trufor"],
   "final_verdict": "Document authenticity concern detected."
 }
 ```
@@ -586,23 +744,24 @@ NOVAC FAKE DOCUMENT AI is complete as a working document fraud detection prototy
 
 Completed modules:
 
-* Backend API
+* FastAPI backend
 * React frontend
 * OCR extraction
 * Structured field matching
+* Masked-field detection
 * Document quality analysis
 * AI/synthetic document detection
-* Masked-field detection
 * ELA detector
-* TruFor integration
 * MVSS integration
+* TruFor integration
 * Detector fusion
+* Parallel MVSS pipeline scheduling
+* Decisive-signal cancellation logic
 * Progress tracking
 * MongoDB result storage
 * History page
 * Results page
 * PDF report generation
-* Performance optimizations
 * Multi-environment setup documentation
 
 ---
