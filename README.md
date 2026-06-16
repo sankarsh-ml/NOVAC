@@ -582,7 +582,7 @@ NOVAC returns a structured result containing:
 
 ## Project Status
 
-NOVAC is complete as a working document fraud detection prototype.
+NOVAC FAKE DOCUMENT AI is complete as a working document fraud detection prototype.
 
 Completed modules:
 
@@ -609,4 +609,4 @@ Completed modules:
 
 ## Disclaimer
 
-NOVAC provides automated document risk analysis using visual, textual, and forensic signals. The output is an investigation aid and should not be treated as legal proof of fraud. Manual verification is recommended before making acceptance, rejection, or escalation decisions.
+NOVAC FAKE DOCUMENT AI provides automated document risk analysis using visual, textual, and forensic signals. The output is an investigation aid and should not be treated as legal proof of fraud. Manual verification is recommended before making acceptance, rejection, or escalation decisions.
