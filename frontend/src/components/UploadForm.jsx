@@ -8,6 +8,7 @@ import {
 } from "react-icons/fa";
 
 import API from "../services/api";
+import useAnalysis from "../context/useAnalysis";
 import "./UploadPage.css";
 
 function UploadForm() {
@@ -15,6 +16,7 @@ function UploadForm() {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [progressStatus, setProgressStatus] = useState(null);
+  const { setAnalysisInProgress } = useAnalysis();
   const navigate = useNavigate();
 
   async function handleUpload() {
@@ -32,6 +34,7 @@ function UploadForm() {
     try {
 
       setLoading(true);
+      setAnalysisInProgress(true);
 
       const formData = new FormData();
 
@@ -104,6 +107,7 @@ function UploadForm() {
     } finally {
 
       setLoading(false);
+      setAnalysisInProgress(false);
 
     }
   }

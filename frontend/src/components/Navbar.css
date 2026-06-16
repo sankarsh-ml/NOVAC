@@ -18,6 +18,25 @@
     1px solid rgba(255,255,255,.08);
 }
 
+.navbar-notice {
+  position: absolute;
+  right: 40px;
+  bottom: -42px;
+
+  padding: 10px 14px;
+  border: 1px solid rgba(250, 204, 21, 0.38);
+  border-radius: 6px;
+
+  background: rgba(24, 24, 27, 0.96);
+  color: #fde68a;
+
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.2;
+
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.32);
+}
+
 .navbar-logo {
   font-size: 1.8rem;
   font-weight: 800;
@@ -53,4 +72,21 @@
 
 .navbar-links a.active {
   color: #a855f7;
+}
+
+.navbar-links a[aria-disabled="true"] {
+  cursor: wait;
+}
+
+@media (max-width: 640px) {
+  .navbar {
+    padding: 16px 20px;
+  }
+
+  .navbar-notice {
+    right: 20px;
+    left: 20px;
+    bottom: -48px;
+    text-align: center;
+  }
 }

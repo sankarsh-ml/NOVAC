@@ -22,6 +22,7 @@ _TRUFOR_MODEL_LOCK = threading.Lock()
 _TRUFOR_RESULT_CACHE = {}
 _TRUFOR_RESULT_CACHE_LOCK = threading.Lock()
 _TRUFOR_ROOT_LOGGED = False
+_TRUFOR_CURRENT_SUBSTEP = "startup"
 
 
 def _result(
@@ -33,10 +34,11 @@ def _result(
     localization_map_path=None,
     reasons=None,
     model_error=None,
-    elapsed_time_seconds=0
+    elapsed_time_seconds=0,
+    timings=None
 ):
 
-    return {
+    result = {
         "model_available": model_available,
         "model": "TruFor",
         "manipulation_detected": manipulation_detected,
@@ -51,6 +53,61 @@ def _result(
             3
         )
     }
+
+    if timings is not None:
+        result["timings"] = timings
+
+    return result
+
+
+def _set_substep(name):
+    global _TRUFOR_CURRENT_SUBSTEP
+    _TRUFOR_CURRENT_SUBSTEP = name
+    print(f"TruFor substep: {name}", file=sys.stderr)
+
+
+def _image_size(image_path):
+    try:
+        if cv2 is not None:
+            image = cv2.imread(str(image_path))
+            if image is not None:
+                height, width = image.shape[:2]
+                return {
+                    "width": int(width),
+                    "height": int(height)
+                }
+    except Exception:
+        pass
+
+    return None
+
+
+def _debug_context(image_path=None, repo_dir=None, checkpoint=None):
+    return {
+        "cwd": os.getcwd(),
+        "python_executable": sys.executable,
+        "sys_path_relevant": [
+            item for item in sys.path
+            if "forgery" in item.lower() or "trufor" in item.lower() or "novac" in item.lower()
+        ][:12],
+        "trufor_root_path": str(repo_dir) if repo_dir else None,
+        "checkpoint_path": str(checkpoint) if checkpoint else None,
+        "image_path": str(image_path) if image_path else None,
+        "image_size": _image_size(image_path) if image_path else None,
+        "current_trufor_substep": _TRUFOR_CURRENT_SUBSTEP
+    }
+
+
+def _print_exception_context(exc, image_path=None, repo_dir=None, checkpoint=None):
+    print(f"TruFor exception type: {type(exc).__name__}", file=sys.stderr)
+    print(f"TruFor exception message: {exc}", file=sys.stderr)
+    print("TruFor traceback:", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
+    print(
+        "TruFor debug context: "
+        + json.dumps(_debug_context(image_path, repo_dir, checkpoint), default=str),
+        file=sys.stderr
+    )
 
 
 def _backend_dir():
@@ -285,15 +342,21 @@ def _torch_load_trusted_checkpoint(torch_module, checkpoint, device):
         )
 
 
-def _get_trufor_model(repo_dir, train_dir, checkpoint):
+def _get_trufor_model(repo_dir, train_dir, checkpoint, timings=None):
 
     global _TRUFOR_MODEL
     global _TRUFOR_DEVICE
     global _TRUFOR_MODEL_KEY
 
+    import_started_at = time.perf_counter()
     torch, _, _, base_config, update_config, get_model = _load_trufor_imports(
         repo_dir
     )
+    if timings is not None:
+        timings["trufor_import_setup_seconds"] = round(
+            time.perf_counter() - import_started_at,
+            3
+        )
     device, gpu_arg = _trufor_device(torch)
     model_key = (
         str(checkpoint.resolve()),
@@ -302,14 +365,19 @@ def _get_trufor_model(repo_dir, train_dir, checkpoint):
 
     if _TRUFOR_MODEL is not None and _TRUFOR_MODEL_KEY == model_key:
         print("Using cached TruFor model", file=sys.stderr)
+        if timings is not None:
+            timings["trufor_model_load_seconds"] = 0
         return _TRUFOR_MODEL, _TRUFOR_DEVICE, torch
 
     with _TRUFOR_MODEL_LOCK:
         if _TRUFOR_MODEL is not None and _TRUFOR_MODEL_KEY == model_key:
             print("Using cached TruFor model", file=sys.stderr)
+            if timings is not None:
+                timings["trufor_model_load_seconds"] = 0
             return _TRUFOR_MODEL, _TRUFOR_DEVICE, torch
 
         print("Loading TruFor model...", file=sys.stderr)
+        _set_substep("model_load")
         started_at = time.perf_counter()
         print(f"TruFor running on {device.type}", file=sys.stderr)
 
@@ -354,6 +422,11 @@ def _get_trufor_model(repo_dir, train_dir, checkpoint):
             f"TruFor model loaded in {time.perf_counter() - started_at:.3f} seconds",
             file=sys.stderr
         )
+        if timings is not None:
+            timings["trufor_model_load_seconds"] = round(
+                time.perf_counter() - started_at,
+                3
+            )
         return _TRUFOR_MODEL, _TRUFOR_DEVICE, torch
 
 
@@ -362,15 +435,22 @@ def _run_trufor_model_to_npz(
     train_dir,
     checkpoint,
     model_image_path,
-    npz_path
+    npz_path,
+    timings=None
 ):
 
+    timings = timings if timings is not None else {}
+    _set_substep("import_setup")
     torch, F, Image, _, _, _ = _load_trufor_imports(repo_dir)
+    timings.setdefault("trufor_import_setup_seconds", 0)
+    _set_substep("model_load")
     model, device, _ = _get_trufor_model(
         repo_dir,
         train_dir,
-        checkpoint
+        checkpoint,
+        timings=timings
     )
+    _set_substep("image_preprocessing")
     preprocess_started_at = time.perf_counter()
 
     with Image.open(model_image_path).convert("RGB") as image:
@@ -382,6 +462,7 @@ def _run_trufor_model_to_npz(
     ) / 256.0
     rgb = rgb.unsqueeze(0).to(device)
     preprocess_seconds = time.perf_counter() - preprocess_started_at
+    _set_substep("inference")
     inference_started_at = time.perf_counter()
 
     with torch.inference_mode():
@@ -391,6 +472,7 @@ def _run_trufor_model_to_npz(
         )
 
     inference_seconds = time.perf_counter() - inference_started_at
+    _set_substep("postprocessing")
     postprocess_started_at = time.perf_counter()
 
     out_dict = {}
@@ -596,15 +678,23 @@ def _run_trufor(image_path, file_hash=None):
 
     started_at = time.perf_counter()
     timings = {}
+    _set_substep("runtime_dependency_import")
+    setup_started_at = time.perf_counter()
     dependencies_available, dependency_error = _load_runtime_dependencies()
+    timings["trufor_import_setup_seconds"] = round(
+        time.perf_counter() - setup_started_at,
+        3
+    )
 
     if not dependencies_available:
         return _result(
             reasons=[dependency_error],
             model_error=dependency_error,
-            elapsed_time_seconds=time.perf_counter() - started_at
+            elapsed_time_seconds=time.perf_counter() - started_at,
+            timings=timings
         )
 
+    _set_substep("path_resolution")
     backend_dir = _backend_dir()
     repo_dir, checkpoint = _find_trufor_paths()
 
@@ -617,7 +707,8 @@ def _run_trufor(image_path, file_hash=None):
                 "TruFor repository not found. Run backend\\scripts\\setup_forgery_model.bat "
                 "and ensure backend\\models\\forgery\\TruFor\\TruFor_train_test\\test.py exists."
             ),
-            elapsed_time_seconds=time.perf_counter() - started_at
+            elapsed_time_seconds=time.perf_counter() - started_at,
+            timings=timings
         )
 
     if not checkpoint:
@@ -630,7 +721,8 @@ def _run_trufor(image_path, file_hash=None):
                 "backend\\models\\forgery\\checkpoints\\trufor.pth.tar or "
                 "backend\\models\\forgery\\TruFor\\TruFor_train_test\\pretrained_models\\trufor.pth.tar."
             ),
-            elapsed_time_seconds=time.perf_counter() - started_at
+            elapsed_time_seconds=time.perf_counter() - started_at,
+            timings=timings
         )
 
     result_cache_key = None
@@ -652,6 +744,7 @@ def _run_trufor(image_path, file_hash=None):
             file=sys.stderr
         )
 
+    _set_substep("image_preprocessing")
     preprocess_started_at = time.perf_counter()
     image = cv2.imread(
         str(image_path)
@@ -663,7 +756,8 @@ def _run_trufor(image_path, file_hash=None):
                 f"Cannot read image: {image_path}"
             ],
             model_error=f"Cannot read image: {image_path}",
-            elapsed_time_seconds=time.perf_counter() - started_at
+            elapsed_time_seconds=time.perf_counter() - started_at,
+            timings=timings
         )
 
     output_dir = backend_dir / "uploads" / "forgery_maps"
@@ -712,11 +806,13 @@ def _run_trufor(image_path, file_hash=None):
             train_dir,
             checkpoint,
             model_image_path,
-            npz_path
+            npz_path,
+            timings=timings
         )
         timings.update(inprocess_timings)
 
     except Exception as exc:
+        _print_exception_context(exc, image_path, repo_dir, checkpoint)
         print(
             f"TruFor persistent model path failed: {exc}",
             file=sys.stderr
@@ -785,7 +881,8 @@ def _run_trufor(image_path, file_hash=None):
                     or completed.stdout.strip()
                     or "TruFor inference failed"
                 ),
-                elapsed_time_seconds=time.perf_counter() - started_at
+                elapsed_time_seconds=time.perf_counter() - started_at,
+                timings=timings
             )
 
     if not npz_path.exists():
@@ -794,9 +891,11 @@ def _run_trufor(image_path, file_hash=None):
                 "TruFor did not produce expected localization output"
             ],
             model_error=f"TruFor did not produce expected output: {npz_path}",
-            elapsed_time_seconds=time.perf_counter() - started_at
+            elapsed_time_seconds=time.perf_counter() - started_at,
+            timings=timings
         )
 
+    _set_substep("postprocessing")
     postprocess_started_at = time.perf_counter()
     output = np.load(
         str(npz_path)
@@ -821,7 +920,8 @@ def _run_trufor(image_path, file_hash=None):
                 "TruFor output missing localization map"
             ],
             model_error="TruFor output missing localization map",
-            elapsed_time_seconds=time.perf_counter() - started_at
+            elapsed_time_seconds=time.perf_counter() - started_at,
+            timings=timings
         )
 
     score = float(
@@ -855,6 +955,8 @@ def _run_trufor(image_path, file_hash=None):
         or regions
     )
 
+    _set_substep("annotation_generation")
+    annotation_started_at = time.perf_counter()
     _save_heatmap(
         cv2.resize(
             map_array,
@@ -862,6 +964,10 @@ def _run_trufor(image_path, file_hash=None):
             interpolation=cv2.INTER_LINEAR
         ),
         map_path
+    )
+    timings["trufor_annotation_seconds"] = round(
+        time.perf_counter() - annotation_started_at,
+        3
     )
 
     reasons = []
@@ -889,6 +995,14 @@ def _run_trufor(image_path, file_hash=None):
     )
     print(
         f"TruFor postprocessing took {timings.get('trufor_postprocess_seconds', 0):.3f} seconds",
+        file=sys.stderr
+    )
+    print(
+        f"TruFor annotation generation took {timings.get('trufor_annotation_seconds', 0):.3f} seconds",
+        file=sys.stderr
+    )
+    print(
+        f"TruFor total took {timings.get('trufor_total_seconds', 0):.3f} seconds",
         file=sys.stderr
     )
 
@@ -968,10 +1082,14 @@ def main():
                 sys.stdout.flush()
 
             except Exception as exc:
+                error_traceback = traceback.format_exc()
                 print(
                     json.dumps({
                         "ok": False,
-                        "error": str(exc)
+                        "error": str(exc),
+                        "exception_type": type(exc).__name__,
+                        "traceback": error_traceback,
+                        "current_trufor_substep": _TRUFOR_CURRENT_SUBSTEP
                     })
                 )
                 sys.stdout.flush()
@@ -979,6 +1097,7 @@ def main():
                     f"TruFor worker error: {exc}",
                     file=sys.stderr
                 )
+                print(error_traceback, file=sys.stderr)
 
         return
 
@@ -1025,17 +1144,27 @@ if __name__ == "__main__":
                 _result(
                     reasons=[message],
                     model_error=message,
-                    elapsed_time_seconds=timeout_seconds
+                    elapsed_time_seconds=timeout_seconds,
+                    timings={
+                        "trufor_total_seconds": timeout_seconds,
+                        "current_trufor_substep": _TRUFOR_CURRENT_SUBSTEP
+                    }
                 )
             )
         )
 
     except Exception as exc:
+        error_traceback = traceback.format_exc()
         print(
             json.dumps(
                 _result(
                     reasons=[str(exc)],
-                    model_error=str(exc)
+                    model_error=str(exc),
+                    timings={
+                        "current_trufor_substep": _TRUFOR_CURRENT_SUBSTEP,
+                        "exception_type": type(exc).__name__,
+                        "traceback": error_traceback
+                    }
                 )
             )
         )
@@ -1043,3 +1172,4 @@ if __name__ == "__main__":
             f"TruFor runner error: {exc}",
             file=sys.stderr
         )
+        print(error_traceback, file=sys.stderr)

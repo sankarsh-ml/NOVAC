@@ -115,6 +115,23 @@ def _trufor_component(result, mvss_regions, reasons, active_groups):
         mvss_regions
     )
 
+    if result.get("skipped"):
+        reason = result.get("skip_reason") or "Skipped due to decisive early signal"
+        return 0, {
+            **_contribution(
+                raw_score,
+                normalized,
+                0,
+                f"TruFor skipped: {reason}"
+            ),
+            "confidence": confidence,
+            "meaningful_region_count": 0,
+            "downweighted_region_count": 0,
+            "skipped": True,
+            "cancelled": bool(result.get("cancelled")),
+            "status": result.get("status")
+        }
+
     if not result.get("model_available"):
         return 0, {
             **_contribution(
@@ -219,6 +236,23 @@ def _mvss_component(result, trufor_regions, trufor_active, reasons, active_group
             meaningful_regions(trufor_regions)
         )
     )
+
+    if result.get("skipped"):
+        reason = result.get("skip_reason") or "Skipped due to decisive early signal"
+        return 0, {
+            **_contribution(
+                raw_score,
+                normalized,
+                0,
+                f"MVSS skipped: {reason}"
+            ),
+            "raw_region_count": 0,
+            "eligible_region_count": 0,
+            "downweighted_region_count": 0,
+            "skipped": True,
+            "cancelled": bool(result.get("cancelled")),
+            "status": result.get("status")
+        }
 
     if not meaningful:
         reason = (
@@ -776,9 +810,36 @@ def calculate_fraud_score(
         document_authenticity_result.get("authenticity_score", 100)
         or 0
     )
+    synthetic_document = (
+        synthetic_detected
+        or synthetic_score_raw >= 65
+        or authenticity_score <= 40
+    )
+    poor_quality_document = (
+        quality_status in {"bad", "unprocessable"}
+        or quality_badge in {"Unclear Document", "Unprocessable Document"}
+        or quality_rejection
+        or physical_damage_score >= 70
+        or float(document_quality_result.get("damage_score", 0) or 0) >= 70
+        or float(document_quality_result.get("crease_score", 0) or 0) >= 70
+    )
+
+    if synthetic_document:
+        score = 100
+    elif poor_quality_document:
+        score = 50
+
     high_threshold = 50
 
-    if quality_status == "unprocessable":
+    if synthetic_document:
+        result_status = "synthetic_suspected"
+        rejection_reason_type = "authenticity"
+        risk_level = "Synthetic Document Suspected"
+        status = "synthetic_suspected"
+        banner_title = "Synthetic document detected."
+        banner_body = "Entire document flagged as synthetic/AI-generated. Region-level annotation is not required."
+
+    elif quality_status == "unprocessable":
         result_status = "unprocessable"
         rejection_reason_type = "quality"
         risk_level = "Analysis Inconclusive"
@@ -786,17 +847,13 @@ def calculate_fraud_score(
         banner_title = "Document could not be analyzed reliably."
         banner_body = "The upload is too blurred, cropped, damaged, or unreadable for reliable automated verification."
 
-    elif (
-        synthetic_detected
-        or synthetic_score_raw >= 65
-        or authenticity_score <= 40
-    ):
-        result_status = "synthetic_suspected"
-        rejection_reason_type = "authenticity"
-        risk_level = "Synthetic Document Suspected"
-        status = "synthetic_suspected"
-        banner_title = "Document authenticity concern detected."
-        banner_body = "The document is clear enough to analyze, but authenticity checks suggest it may be AI-generated, synthetic, or digitally fabricated."
+    elif poor_quality_document:
+        result_status = "quality_warning"
+        rejection_reason_type = None
+        risk_level = "Analysis Limited"
+        status = "quality_warning"
+        banner_title = "Document quality limits reliable analysis."
+        banner_body = "Document quality is poor. Region-level forensic annotation is not required."
 
     elif score >= high_threshold:
         result_status = "fraud_suspected"

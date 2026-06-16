@@ -27,6 +27,35 @@ USE_FP16_INFERENCE = os.getenv("USE_FP16_INFERENCE", "false").lower() == "true"
 MVSS_DEVICE = os.getenv("MVSS_DEVICE", "cpu").lower()
 
 
+def _configured_thread_count():
+
+    configured = os.getenv(
+        "MVSS_NUM_THREADS",
+        os.getenv("MVSS_CPU_THREADS", "auto")
+    )
+    cpu_count = os.cpu_count() or 1
+
+    if str(configured).lower() == "auto":
+        return max(1, min(2, cpu_count))
+
+    try:
+        return max(1, int(configured))
+    except Exception:
+        logger.warning("Invalid MVSS thread config %s; using auto", configured)
+        return max(1, min(2, cpu_count))
+
+
+def _configured_opencv_threads():
+
+    configured = os.getenv("OPENCV_NUM_THREADS", "0")
+
+    try:
+        return max(0, int(configured))
+    except Exception:
+        logger.warning("Invalid OPENCV_NUM_THREADS=%s; using 0", configured)
+        return 0
+
+
 class TamperingService:
 
     def __init__(self):
@@ -41,6 +70,7 @@ class TamperingService:
         started_at = time.perf_counter()
         logger.info("MVSS configured for CPU mode")
         logger.info("MVSS torch version: %s", torch.__version__)
+        logger.info("MVSS worker CPU core count: %s", os.cpu_count())
         selected_device = "cpu"
 
         if MVSS_DEVICE == "cuda":
@@ -57,13 +87,32 @@ class TamperingService:
         logger.info("MVSS running on %s", device.type)
 
         if device.type == "cpu":
-            thread_count = os.getenv("MVSS_CPU_THREADS")
+            thread_count = _configured_thread_count()
 
-            if thread_count:
-                try:
-                    torch.set_num_threads(max(1, int(thread_count)))
-                except Exception:
-                    logger.exception("Unable to set MVSS_CPU_THREADS=%s", thread_count)
+            try:
+                torch.set_num_threads(thread_count)
+            except Exception:
+                logger.exception("Unable to set MVSS torch thread count=%s", thread_count)
+
+            try:
+                torch.set_num_interop_threads(1)
+            except Exception:
+                logger.debug("Unable to set MVSS torch interop threads", exc_info=True)
+
+            logger.info("MVSS torch thread count: %s", torch.get_num_threads())
+            logger.info("MVSS torch interop thread count: %s", torch.get_num_interop_threads())
+
+        opencv_threads = _configured_opencv_threads()
+
+        try:
+            cv2.setNumThreads(opencv_threads)
+        except Exception:
+            logger.exception("Unable to set OpenCV thread count=%s", opencv_threads)
+
+        try:
+            logger.info("MVSS OpenCV thread count: %s", cv2.getNumThreads())
+        except Exception:
+            logger.info("MVSS OpenCV thread count configured: %s", opencv_threads)
 
         model = get_mvss(
             backbone="resnet50",

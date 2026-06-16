@@ -16,16 +16,21 @@ def _print_run(label, elapsed, result):
     mvss = result.get("tampering_analysis", {}) or {}
 
     print(f"\n{label}")
-    print(f"  total wall time: {elapsed:.3f}s")
-    print(f"  total reported: {timings.get('total_seconds', 'n/a')}s")
-    print(f"  OCR: {timings.get('ocr_seconds', 'n/a')}s")
-    print(f"  TruFor: {timings.get('trufor_total_seconds', trufor.get('elapsed_time_seconds', 'n/a'))}s")
-    print(f"  MVSS: {timings.get('mvss_total_seconds', 'n/a')}s")
-    print(f"  MVSS inference: {timings.get('mvss_inference_seconds', 'n/a')}s")
-    print(f"  MVSS cache lookup: {timings.get('mvss_cache_lookup_seconds', 'n/a')}s")
-    print(f"  MVSS timed out: {timings.get('mvss_timed_out', mvss.get('timed_out', False))}")
-    print(f"  ELA: {timings.get('ela_seconds', 'n/a')}s")
-    print(f"  save: {timings.get('save_seconds', 'n/a')}s")
+    print(f"  total_seconds: {timings.get('total_seconds', round(elapsed, 3))}s")
+    print(f"  mvss_total_seconds: {timings.get('mvss_total_seconds', 'n/a')}s")
+    print(f"  mvss_wall_seconds: {timings.get('mvss_wall_seconds', 'n/a')}s")
+    print(f"  ocr_seconds: {timings.get('ocr_seconds', 'n/a')}s")
+    print(f"  ela_seconds: {timings.get('ela_seconds', 'n/a')}s")
+    print(f"  quality_seconds: {timings.get('quality_seconds', timings.get('document_quality_seconds', 'n/a'))}s")
+    print(f"  authenticity_seconds: {timings.get('authenticity_seconds', 'n/a')}s")
+    print(f"  text_consistency_seconds: {timings.get('text_consistency_seconds', 'n/a')}s")
+    print(f"  wait_for_mvss_seconds: {timings.get('wait_for_mvss_seconds', 'n/a')}s")
+    print(f"  trufor_total_seconds: {timings.get('trufor_total_seconds', trufor.get('elapsed_time_seconds', 'n/a'))}s")
+    print(f"  trufor_seconds: {timings.get('trufor_seconds', timings.get('trufor_total_seconds', 'n/a'))}s")
+    print(f"  mvss_inference_seconds: {timings.get('mvss_inference_seconds', 'n/a')}s")
+    print(f"  mvss_cache_lookup_seconds: {timings.get('mvss_cache_lookup_seconds', 'n/a')}s")
+    print(f"  mvss_timed_out: {timings.get('mvss_timed_out', mvss.get('timed_out', False))}")
+    print(f"  save_seconds: {timings.get('save_seconds', 'n/a')}s")
     print(f"  TruFor cache hit: {trufor.get('cache_hit', False)}")
     print(f"  MVSS cache hit: {mvss.get('cache_hit', False)}")
     print(f"  risk level: {(result.get('fraud_analysis') or {}).get('risk_level', 'n/a')}")
@@ -52,7 +57,8 @@ def main():
     if str(backend_dir) not in sys.path:
         sys.path.insert(0, str(backend_dir))
 
-    from app.api.upload import _run_saved_analysis
+    from app.api import upload as upload_module
+    from app.services import detector_cache
 
     file_path = Path(args.file).resolve()
     second_file_path = Path(args.second_file).resolve() if args.second_file else file_path
@@ -64,21 +70,24 @@ def main():
         raise SystemExit(f"Second file not found: {second_file_path}")
 
     runs = [
-        ("First run (cold load)", file_path),
-        (
-            "Second run (warm MVSS model)"
-            if second_file_path != file_path
-            else "Second run (same file, cache expected)",
-            second_file_path
-        ),
-        ("Third run (same-file MVSS cache hit)", file_path)
+        ("Old sequential mode", False, file_path),
+        ("New MVSS-overlap mode", True, second_file_path)
     ]
 
-    for label, run_file in runs:
+    for label, parallel_mvss_pipeline, run_file in runs:
+        with detector_cache._CACHE_LOCK:
+            detector_cache._CACHE.clear()
+
+        os.environ["PARALLEL_MVSS_PIPELINE"] = (
+            "true"
+            if parallel_mvss_pipeline
+            else "false"
+        )
+        upload_module.PARALLEL_MVSS_PIPELINE = parallel_mvss_pipeline
         case_id = f"BENCH-{uuid.uuid4().hex[:8].upper()}"
         extension = run_file.suffix.lower()
         started_at = time.perf_counter()
-        result = _run_saved_analysis(
+        result = upload_module._run_saved_analysis(
             case_id,
             run_file.name,
             run_file.name,

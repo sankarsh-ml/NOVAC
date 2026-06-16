@@ -1,20 +1,30 @@
 # NOVAC
 
-NOVAC is an AI-powered document authenticity and fraud detection platform. It analyzes uploaded documents using OCR, forensic localization, visual tampering detection, synthetic document detection, document quality checks, and automated risk reporting.
+NOVAC is an AI-powered document fraud detection and authenticity analysis system. It verifies uploaded documents using OCR, document quality checks, AI/synthetic document detection, forensic localization, visual tampering detection, text consistency checks, and automated PDF investigation reports.
+
+The system is designed to analyze documents such as Aadhaar cards, PAN cards, ID documents, certificates, and scanned PDFs, then return a structured fraud risk assessment with visual evidence and extracted fields.
+
+---
 
 ## Features
 
-* OCR-based text extraction and structured field matching
-* Document quality analysis for blur, glare, folds, creases, and readability
-* Document authenticity and synthetic document detection
+* Document upload and analysis
+* OCR-based text extraction using PaddleOCR
+* Structured field extraction for Aadhaar, PAN, and similar ID documents
+* Document quality analysis for blur, glare, folds, creases, wrinkles, and readability
+* AI-generated / synthetic document detection
+* Masked-field and hidden-field detection
+* ELA-based compression consistency analysis
 * TruFor-based forgery localization
-* MVSS-based visual tampering analysis
-* ELA/compression consistency analysis
-* Text consistency and suspicious field detection
+* MVSS-based visual tampering detection
+* Text consistency and field mismatch detection
 * Suspicious region visualization
-* Real-time analysis progress tracking
+* Real-time progress tracking during analysis
 * MongoDB-backed result storage and history
-* Downloadable PDF investigation reports
+* Professional PDF investigation report generation
+* Frontend dashboard for upload, results, history, and report download
+
+---
 
 ## Tech Stack
 
@@ -25,10 +35,11 @@ NOVAC is an AI-powered document authenticity and fraud detection platform. It an
 * MongoDB
 * PaddleOCR
 * OpenCV
+* PyMuPDF
 * PyTorch
 * TruFor
 * MVSS-Net
-* ReportLab / PDF generation utilities
+* ReportLab
 
 ### Frontend
 
@@ -37,307 +48,238 @@ NOVAC is an AI-powered document authenticity and fraud detection platform. It an
 * CSS
 * REST API integration
 
-## Analysis Pipeline
+---
 
-The system processes each uploaded document through multiple stages:
-
-1. File upload and preparation
-2. PDF text extraction or PDF-to-image rendering
-3. OCR text extraction
-4. Structured field extraction
-5. Document quality analysis
-6. Document authenticity analysis
-7. AI/synthetic document detection
-8. ELA analysis
-9. TruFor forgery localization
-10. MVSS tampering detection
-11. Text consistency analysis
-12. Detector fusion and final risk calculation
-13. Result storage
-14. PDF report generation
-
-## Risk Output
-
-NOVAC separates different types of findings instead of treating them as the same issue:
-
-* **Fraud Risk**: final fraud/tampering risk score
-* **Document Authenticity**: synthetic or AI-generated document suspicion
-* **Document Quality**: clarity, folds, damage, blur, or readability warnings
-* **Detector Signals**: individual detector contributions
-* **Suspicious Regions**: annotated visual evidence areas
-
-This allows a document to be visually clear but still suspicious, or physically damaged while still analyzable.
-
-## Progress Tracking
-
-The backend provides real-time analysis status updates so the frontend can show the current running stage.
-
-Example stages:
-
-* Upload received
-* Running OCR
-* Checking document quality
-* Checking document authenticity
-* Running TruFor analysis
-* Running MVSS analysis
-* Combining detector results
-* Saving result
-* Analysis complete
-
-## PDF Reports
-
-NOVAC generates investigation reports containing:
-
-* Case summary
-* Risk level
-* Fraud score
-* Authenticity score
-* Document quality score
-* Detector summary
-* Suspicious regions
-* Extracted structured fields
-* Cleaned OCR text
-* Final verdict and disclaimer
-
-## Installation and Environment Setup
-
-NOVAC uses multiple Python virtual environments because some detector models require different dependency versions. The main backend runs the FastAPI server, while heavier forensic detectors such as MVSS can run through their own isolated environments.
-
-This prevents dependency conflicts between OCR, PyTorch models, PaddleOCR, TruFor, MVSS, and the main API.
-
-## Environment Structure
-
-Recommended project structure:
+## Project Structure
 
 ```txt
 novac/
 ├── backend/
 │   ├── app/
+│   │   ├── main.py
+│   │   ├── routes/
+│   │   ├── services/
+│   │   └── models/
 │   ├── scripts/
 │   └── requirements.txt
 ├── frontend/
-├── venv/              # Main backend environment
-├── mvss_venv/         # MVSS-specific environment
+│   ├── src/
+│   ├── public/
+│   └── package.json
+├── venv/
+├── mvss_venv/
 ├── uploads/
 ├── README.md
 └── .env
 ```
 
-## 1. Main Backend Environment
+---
 
-The main backend environment runs:
+## Main Analysis Pipeline
 
-* FastAPI server
-* MongoDB integration
-* OCR service
-* PDF processing
-* document quality checks
-* document authenticity checks
-* ELA
-* TruFor service interface
-* MVSS service interface
-* report generation
-* progress tracking
-
-Create and activate the main environment:
-
-```bash
-cd D:\novac
-python -m venv venv
-venv\Scripts\activate
-```
-
-Install backend dependencies:
-
-```bash
-pip install -r backend\requirements.txt
-```
-
-If there is no complete requirements file yet, install the common backend packages:
-
-```bash
-pip install fastapi uvicorn python-multipart pymongo python-dotenv opencv-python numpy pillow pymupdf reportlab paddleocr paddlepaddle
-```
-
-Run a quick health check:
-
-```bash
-python -m compileall backend\app
-```
-
-Start the backend:
-
-```bash
-uvicorn backend.app.main:app --reload
-```
-
-or, if the app is run from inside the backend folder:
-
-```bash
-cd backend
-uvicorn app.main:app --reload
-```
-
-## 2. MVSS Environment
-
-MVSS is kept in a separate environment because it may require a specific PyTorch version that is different from the main backend.
-
-Create the MVSS environment:
-
-```bash
-cd D:\novac
-python -m venv mvss_venv
-mvss_venv\Scripts\activate
-```
-
-Install MVSS dependencies according to the MVSS-Net requirements.
-
-Example:
-
-```bash
-pip install -r backend\MVSS-Net\requirements.txt
-```
-
-If MVSS requires a specific older PyTorch version, keep that version inside `mvss_venv`.
-
-Do not force the latest CUDA/PyTorch version unless MVSS has been tested with it.
-
-NOVAC currently treats MVSS as CPU-safe by default to preserve compatibility and accuracy.
-
-Expected MVSS behavior:
-
-* MVSS model loads once in the worker.
-* The loaded model is reused for later analysis.
-* Repeated files use detector cache.
-* If MVSS takes too long, it should timeout gracefully instead of freezing the full pipeline.
-
-Check MVSS environment:
-
-```bash
-mvss_venv\Scripts\activate
-python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available())"
-```
-
-Run the MVSS runtime test if available:
-
-```bash
-python backend\scripts\test_mvss_cpu_runtime.py
-```
-
-## 3. TruFor Environment / Service
-
-TruFor may run either through the main backend environment or through its own model directory depending on the current project setup.
-
-The important requirement is that the TruFor root folder must be importable. The folder containing TruFor’s internal `lib/` directory should be added to the Python path by the service.
-
-Expected TruFor behavior:
-
-* TruFor model loads lazily.
-* The loaded model is reused.
-* Same-file detector results are cached using file hash.
-* The service should not reload model weights on every request.
-
-If TruFor import errors occur, check that the TruFor root path is correctly configured and that `lib/config.py` exists.
-
-## 4. Frontend Setup
-
-The frontend runs separately from the backend.
-
-```bash
-cd D:\novac\frontend
-npm install
-npm run dev
-```
-
-The frontend communicates with the backend API for:
-
-* document upload
-* analysis start
-* progress polling
-* result display
-* PDF report download
-* history page
-
-## 5. Environment Variables
-
-Create a `.env` file in the project/backend location expected by the app.
-
-Example:
-
-```env
-MONGO_URI=mongodb://localhost:27017
-DATABASE_NAME=novac
-MVSS_DEVICE=cpu
-MVSS_TIMEOUT_SECONDS=300
-FULL_FORENSIC_MODE=true
-```
-
-Optional settings may include:
-
-```env
-DEBUG_DETECTOR_OUTPUTS=false
-PARALLEL_DETECTORS=false
-USE_FP16_INFERENCE=false
-```
-
-## 6. How the Multi-Environment Pipeline Works
-
-The main FastAPI backend receives the uploaded file and controls the complete analysis flow.
-
-Pipeline:
+NOVAC processes each uploaded document through the following stages:
 
 ```txt
-Frontend upload
+Upload received
 ↓
-FastAPI backend receives file
+File preparation
 ↓
-Backend creates case ID
+PDF text extraction / PDF rendering
 ↓
-Progress status starts
+OCR extraction
 ↓
-PDF text extraction / image preparation
+Structured field matching
 ↓
-OCR
+Masked-field detection
 ↓
-Document quality check
+Document quality analysis
 ↓
-Document authenticity check
+Document authenticity / synthetic detection
 ↓
-ELA
+ELA analysis
 ↓
-TruFor
+MVSS visual tampering analysis
 ↓
-MVSS worker
+TruFor forgery localization
 ↓
-Text consistency
+Text consistency analysis
 ↓
 Detector fusion
 ↓
 Final risk calculation
 ↓
-MongoDB save
+MongoDB result storage
 ↓
-PDF report generation
-↓
-Frontend results page
+PDF report generation on request
 ```
 
-The frontend does not directly call MVSS or TruFor. It only talks to the main backend.
+---
 
-The backend is responsible for calling each detector service. If a detector requires a separate environment, the backend service/runner uses that environment internally through a worker or subprocess.
+## Detector Modules
 
-For example:
+### 1. OCR and Structured Field Extraction
+
+The OCR module extracts text from images and scanned documents. The post-processing layer converts raw OCR lines into structured fields.
+
+Supported structured fields include:
+
+* Document type
+* Name
+* Date of birth
+* Gender
+* Aadhaar number
+* VID
+* PAN number
+* Father's name
+* Address
+* Enrolment number
+* Issue date
+
+Raw OCR lines are cleaned and filtered before being displayed in the final report.
+
+---
+
+### 2. Document Quality Analysis
+
+The quality module checks whether the uploaded document is clear enough for automated analysis.
+
+It detects:
+
+* Severe blur
+* Glare or overexposure
+* Low resolution
+* Physical folds
+* Creases
+* Wrinkles
+* Torn or damaged document regions
+* Unclear document boundaries
+
+Document quality is treated separately from fraud risk. A document can be high risk due to fraud, or simply unclear due to quality issues.
+
+---
+
+### 3. Document Authenticity and Synthetic Detection
+
+This module checks whether the document appears authentic or AI-generated.
+
+It detects:
+
+* Synthetic / AI-generated documents
+* Overly clean fake templates
+* Placeholder-like ID numbers
+* Weak camera or print acquisition traces
+* Suspicious digital composition
+* Official digital PDF structure when applicable
+
+Official digital PDFs are handled separately so that clean PDF rendering is not incorrectly treated as AI-generated.
+
+---
+
+### 4. Masked Field Detection
+
+The masking module detects hidden or masked critical fields, such as masked Aadhaar numbers or covered document identifiers.
+
+Examples:
 
 ```txt
-Main backend venv
-    ├── handles API, OCR, reports, MongoDB
-    ├── calls TruFor service
-    └── calls MVSS worker using mvss_venv
+XXXX XXXX XXXX
+**** **** ****
+xxxxxxxxxxxx
 ```
 
-## 7. Progress Tracking
+Masked fields are highlighted in the annotated image when the image is otherwise analyzable.
 
-When analysis starts, the backend creates a case ID and updates the current progress stage.
+---
+
+### 5. ELA Analysis
+
+ELA checks image compression consistency and helps identify suspicious edited regions based on abnormal compression artifacts.
+
+---
+
+### 6. TruFor Forgery Localization
+
+TruFor is used for image forgery localization. It identifies possible manipulated regions in the uploaded document image.
+
+The system includes:
+
+* Persistent model loading
+* Detector result caching
+* Timeout handling
+* Detailed timing logs
+* Standalone runtime test support
+
+---
+
+### 7. MVSS Visual Tampering Detection
+
+MVSS is used for visual tampering detection. It is kept in a separate environment because it may require specific PyTorch dependencies.
+
+The system includes:
+
+* Separate `mvss_venv`
+* CPU-safe MVSS execution
+* Persistent worker reuse
+* Detector result caching
+* Timeout handling
+* Progress updates during long inference
+
+---
+
+## Final Result Logic
+
+NOVAC separates the final result into independent signals:
+
+* Fraud risk
+* Document authenticity
+* Document quality
+* Detector evidence
+* Suspicious regions
+
+This prevents one signal from incorrectly overriding all others.
+
+Example:
+
+```txt
+Risk Level: High Risk
+Quality Badge: Unclear Document
+```
+
+This means the document has fraud indicators, while also having quality issues.
+
+---
+
+## Decisive Early Signals
+
+If the system detects a decisive issue early, it avoids unnecessary deep forensic processing.
+
+Deep detectors such as MVSS and TruFor can be skipped or cancelled when:
+
+* Masked critical fields are detected
+* Document quality is poor or unprocessable
+* AI-generated / synthetic document is detected
+
+Skipped detectors are marked clearly as skipped, not treated as clean passes.
+
+Example skipped detector output:
+
+```json
+{
+  "enabled": true,
+  "completed": false,
+  "skipped": true,
+  "skip_reason": "synthetic_detected",
+  "score": null,
+  "suspicious_regions": [],
+  "status": "skipped_due_to_decisive_signal"
+}
+```
+
+---
+
+## Progress Tracking
+
+NOVAC includes backend-driven progress tracking.
 
 The frontend polls:
 
@@ -345,20 +287,20 @@ The frontend polls:
 GET /analysis/status/{case_id}
 ```
 
-Example status response:
+Example response:
 
 ```json
 {
   "case_id": "NOVAC-D03C6239",
-  "stage": "Running MVSS model inference",
-  "progress": 87,
-  "message": "Running MVSS on CPU. This may take a while.",
+  "stage": "Running OCR",
+  "progress": 35,
+  "message": "Extracting readable text from the document",
   "complete": false,
   "error": null
 }
 ```
 
-Common stages:
+Common progress stages:
 
 ```txt
 Upload received
@@ -368,14 +310,9 @@ Rendering PDF page
 Running OCR
 Checking document quality
 Checking document authenticity
-Running AI/synthetic detection
 Running ELA analysis
-Preparing TruFor input
-Running TruFor model inference
-Processing TruFor output
-Preparing MVSS input
-Running MVSS model inference
-Processing MVSS output
+Running MVSS analysis
+Running TruFor analysis
 Running text consistency analysis
 Combining detector results
 Calculating final risk
@@ -383,50 +320,218 @@ Saving result
 Analysis complete
 ```
 
-## 8. Detector Caching
+---
 
-Expensive detector outputs are cached using file hashes.
+## PDF Reports
 
-Cache keys include:
+NOVAC generates professional investigation reports containing:
 
-* file hash
-* detector name
-* model version
-* config version
+* Case ID
+* File name
+* Analysis date and time
+* Risk level
+* Fraud score
+* Authenticity score
+* Document quality score
+* Quality badge
+* Key findings
+* Detector summary
+* Suspicious regions
+* Structured extracted fields
+* Cleaned extracted text
+* Final verdict
+* Disclaimer
 
-This means:
+Raw OCR dumps are hidden by default to keep the report clean. Debug OCR details can be enabled separately if needed.
 
-* First run of a new file may be slow.
-* Second run after model warm-up should be faster.
-* Re-analyzing the exact same file should be much faster due to cache hits.
+---
 
-## 9. Runtime Checks
+## Installation
 
-To verify the main backend environment:
+NOVAC uses multiple Python environments because some forensic models require different dependency versions.
 
-```bash
+### 1. Main Backend Environment
+
+The main backend environment runs FastAPI, OCR, MongoDB, PDF handling, document quality, authenticity analysis, ELA, report generation, and service orchestration.
+
+```bat
+cd /d D:\novac
+python -m venv venv
+venv\Scripts\activate
+pip install -r backend\requirements.txt
+```
+
+If a requirements file is incomplete, install the common packages manually:
+
+```bat
+pip install fastapi uvicorn python-multipart pymongo python-dotenv opencv-python numpy pillow pymupdf reportlab paddleocr paddlepaddle
+```
+
+Run a compile check:
+
+```bat
+python -m compileall backend\app backend\scripts
+```
+
+Start the backend:
+
+```bat
+cd /d D:\novac
+venv\Scripts\activate
+uvicorn backend.app.main:app --reload
+```
+
+Alternative backend start command:
+
+```bat
+cd /d D:\novac\backend
+..\venv\Scripts\activate
+uvicorn app.main:app --reload
+```
+
+Backend runs at:
+
+```txt
+http://127.0.0.1:8000
+```
+
+---
+
+### 2. MVSS Environment
+
+MVSS runs in its own environment to avoid dependency conflicts.
+
+```bat
+cd /d D:\novac
+python -m venv mvss_venv
+mvss_venv\Scripts\activate
+```
+
+Install MVSS dependencies according to the MVSS-Net requirements:
+
+```bat
+pip install -r backend\MVSS-Net\requirements.txt
+```
+
+Check MVSS runtime:
+
+```bat
+python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available())"
+```
+
+Run MVSS runtime test if available:
+
+```bat
+python backend\scripts\test_mvss_cpu_runtime.py
+```
+
+MVSS currently runs CPU-safe by default for compatibility.
+
+---
+
+### 3. Frontend Setup
+
+```bat
+cd /d D:\novac\frontend
+npm install
+npm run dev
+```
+
+The frontend communicates with the backend for:
+
+* Uploading documents
+* Starting analysis
+* Polling progress
+* Viewing results
+* Viewing history
+* Downloading PDF reports
+
+---
+
+### 4. Environment Variables
+
+Create a `.env` file in the expected backend/project location.
+
+Example:
+
+```env
+MONGO_URI=mongodb://localhost:27017
+DATABASE_NAME=novac
+
+MVSS_DEVICE=cpu
+MVSS_TIMEOUT_SECONDS=300
+TRUFOR_TIMEOUT_SECONDS=180
+
+FULL_FORENSIC_MODE=true
+DEBUG_REPORT=false
+PARALLEL_DETECTORS=false
+```
+
+---
+
+## MongoDB
+
+MongoDB is used to store analysis results, case history, progress status, and report metadata.
+
+Make sure MongoDB is running before starting the backend.
+
+---
+
+## Running the Full Project
+
+### Terminal 1 — Backend
+
+```bat
+cd /d D:\novac
+venv\Scripts\activate
+uvicorn backend.app.main:app --reload
+```
+
+### Terminal 2 — Frontend
+
+```bat
+cd /d D:\novac\frontend
+npm run dev
+```
+
+---
+
+## Runtime Health Checks
+
+Check backend imports:
+
+```bat
 venv\Scripts\activate
 python backend\scripts\check_runtime_health.py
 ```
 
-To verify MVSS separately:
+Check MVSS runtime:
 
-```bash
+```bat
 mvss_venv\Scripts\activate
 python backend\scripts\test_mvss_cpu_runtime.py
 ```
 
-To compile-check the backend:
+Check TruFor runtime:
 
-```bash
+```bat
+venv\Scripts\activate
+python backend\scripts\test_trufor_runtime.py path\to\test_image.jpg
+```
+
+Compile backend:
+
+```bat
 python -m compileall backend\app backend\scripts
 ```
 
-## 10. Git Ignore Notes
+---
 
-Do not commit virtual environments, uploads, caches, or model outputs.
+## Git Ignore
 
-The `.gitignore` should include:
+Do not commit environments, uploads, caches, logs, or generated files.
+
+Recommended `.gitignore` entries:
 
 ```gitignore
 venv/
@@ -440,46 +545,68 @@ uploads/
 *.pyd
 .env
 *.log
+*.pdf
+*.tmp
 ```
 
-Large model weights/checkpoints should also not be committed unless the repository is intentionally configured for them.
+Large model weights and checkpoints should not be committed unless the repository is explicitly configured for them.
 
-## 11. Running the Full Project
+---
 
-Terminal 1 — Backend:
+## Example Output
 
-```bash
-cd D:\novac
-venv\Scripts\activate
-uvicorn backend.app.main:app --reload
+NOVAC returns a structured result containing:
+
+```json
+{
+  "case_id": "NOVAC-XXXXXXX",
+  "fraud_score": 80,
+  "risk_level": "Synthetic Document Suspected",
+  "result_status": "synthetic_suspected",
+  "document_quality": {
+    "quality_status": "good",
+    "quality_score": 79
+  },
+  "document_authenticity": {
+    "synthetic_detected": true,
+    "synthetic_score": 100,
+    "authenticity_score": 0
+  },
+  "detector_results": {},
+  "suspicious_regions": [],
+  "final_verdict": "Document authenticity concern detected."
+}
 ```
 
-Terminal 2 — Frontend:
+---
 
-```bash
-cd D:\novac\frontend
-npm run dev
-```
+## Project Status
 
-MongoDB should be running before starting analysis.
+NOVAC is complete as a working document fraud detection prototype.
 
-## 12. Notes
+Completed modules:
 
-* The main backend environment controls the app.
-* MVSS uses its own environment to avoid dependency conflicts.
-* MVSS currently runs CPU-safe by default for compatibility.
-* TruFor and MVSS use persistent model loading to reduce repeated startup cost.
-* Detector caching improves repeated analysis speed.
-* The generated PDF report is an automated investigation aid and should be manually reviewed before final decisions.
+* Backend API
+* React frontend
+* OCR extraction
+* Structured field matching
+* Document quality analysis
+* AI/synthetic document detection
+* Masked-field detection
+* ELA detector
+* TruFor integration
+* MVSS integration
+* Detector fusion
+* Progress tracking
+* MongoDB result storage
+* History page
+* Results page
+* PDF report generation
+* Performance optimizations
+* Multi-environment setup documentation
 
-
-## Notes
-
-* MVSS can run in a separate environment if its dependencies require isolation.
-* Heavy forensic models may take time on first run because model weights need to load.
-* Cached detector results and persistent model workers are used to improve repeated analysis speed.
-* The generated report is an automated investigation aid and should not be treated as legal proof of fraud without manual verification.
+---
 
 ## Disclaimer
 
-NOVAC provides automated document risk analysis based on visual, textual, and forensic signals. Results should be reviewed by a human before making acceptance, rejection, or escalation decisions.
+NOVAC provides automated document risk analysis using visual, textual, and forensic signals. The output is an investigation aid and should not be treated as legal proof of fraud. Manual verification is recommended before making acceptance, rejection, or escalation decisions.

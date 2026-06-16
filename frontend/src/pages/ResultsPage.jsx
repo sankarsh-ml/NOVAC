@@ -7,27 +7,64 @@ import RiskBadge from "../components/RiskBadge";
 
 import "./ResultsPage.css";
 
+const skipReasonText = (reason) => {
+  const labels = {
+    synthetic_detected: "synthetic document was already detected",
+    masked_fields_detected: "masked critical fields were already detected",
+    poor_quality: "poor document quality was already detected",
+    unprocessable_quality: "poor document quality was already detected",
+  };
+
+  return labels[reason] ?? "a decisive signal was already detected";
+};
+
+const DetectorCard = ({
+  title,
+  score,
+  status,
+  reasons = []
+}) => (
+  <div className="detector-card">
+    <div className="detector-head">
+      <h3>{title}</h3>
+      <span>{score}</span>
+    </div>
+    <p className="detector-status">
+      {status}
+    </p>
+    {reasons.length > 0 && (
+      <ul>
+        {reasons.slice(0, 3).map((reason, index) => (
+          <li key={index}>{reason}</li>
+        ))}
+      </ul>
+    )}
+  </div>
+);
+
 function ResultsPage() {
   const { caseId } = useParams();
 
   const [result, setResult] = useState(null);
 
   useEffect(() => {
-    loadResult();
-  }, []);
+    let isActive = true;
 
-  async function loadResult() {
-    try {
-      const response = await API.get(
-        `/results/case/${caseId}`
-      );
+    API.get(`/results/case/${caseId}`)
+      .then((response) => {
+        if (isActive) {
+          setResult(response.data);
+        }
+      })
+      .catch((error) => {
+        console.error(error);
+        alert("Failed to load analysis");
+      });
 
-      setResult(response.data);
-    } catch (error) {
-      console.error(error);
-      alert("Failed to load analysis");
-    }
-  }
+    return () => {
+      isActive = false;
+    };
+  }, [caseId]);
 
   const downloadReport = () => {
     window.open(
@@ -55,30 +92,6 @@ function ResultsPage() {
 
     return Math.max(0, Math.min(100, Math.round(numeric)));
   };
-
-  const DetectorCard = ({
-    title,
-    score,
-    status,
-    reasons = []
-  }) => (
-    <div className="detector-card">
-      <div className="detector-head">
-        <h3>{title}</h3>
-        <span>{score}</span>
-      </div>
-      <p className="detector-status">
-        {status}
-      </p>
-      {reasons.length > 0 && (
-        <ul>
-          {reasons.slice(0, 3).map((reason, index) => (
-            <li key={index}>{reason}</li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
 
   if (!result) {
     return (
@@ -172,6 +185,16 @@ function ResultsPage() {
     result?.mvss_preprocess_analysis
     ?? result?.preprocessing_analysis
     ?? {};
+
+  const annotationMessage =
+    result?.annotation_skip_message
+    ?? (
+      result?.annotation_skip_reason === "synthetic_detected"
+        ? "Entire document flagged as synthetic/AI-generated. No region-level annotation required."
+        : result?.annotation_skip_reason === "poor_quality"
+        ? "Document quality is poor. No region-level annotation generated."
+        : null
+    );
 
   return (
     <>
@@ -445,9 +468,11 @@ function ResultsPage() {
 
             <DetectorCard
               title="Forgery Localization"
-              score={normalizeScore(forgery.forgery_score)}
+              score={forgery.skipped ? "Not run" : normalizeScore(forgery.forgery_score)}
               status={
-                forgery.model_available === false
+                forgery.skipped
+                  ? `Skipped because ${skipReasonText(forgery.skip_reason)}`
+                  : forgery.model_available === false
                   ? "TruFor unavailable during this run"
                   : contributions.trufor?.contribution === 0
                     && (forgery.suspicious_regions?.length ?? 0) > 0
@@ -525,9 +550,11 @@ function ResultsPage() {
 
             <DetectorCard
               title="Visual Tampering"
-              score={metric(tampering.tampering_score)}
+              score={tampering.skipped ? "Not run" : metric(tampering.tampering_score)}
               status={
-                tampering.tampering_detected
+                tampering.skipped
+                  ? `Skipped because ${skipReasonText(tampering.skip_reason)}`
+                  : tampering.tampering_detected
                   && (tampering.scoring_region_count ?? tampering.suspicious_region_count ?? 0) > 0
                   ? "MVSS detected scoring-eligible suspicious visual manipulation regions"
                   : tampering.raw_region_count > 0
@@ -576,13 +603,20 @@ function ResultsPage() {
         </div>
 
         <div className="image-grid">
-          {result.annotated_image_path && (
+          {result.annotation_generated !== false && result.annotated_image_path && (
             <div>
               <h2>Suspicious Regions</h2>
               <img
                 src={imageUrl(result.annotated_image_path)}
                 alt="Annotated Analysis"
               />
+            </div>
+          )}
+
+          {annotationMessage && (
+            <div className="component-card">
+              <h2>Suspicious Regions</h2>
+              <p>{annotationMessage}</p>
             </div>
           )}
 

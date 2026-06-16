@@ -28,6 +28,36 @@ _WORKER_QUEUE = None
 _WORKER_READER = None
 
 
+def _configured_mvss_threads():
+
+    configured = os.getenv(
+        "MVSS_NUM_THREADS",
+        os.getenv("MVSS_CPU_THREADS", "auto")
+    )
+    cpu_count = os.cpu_count() or 1
+
+    if str(configured).lower() == "auto":
+        return max(1, min(2, cpu_count))
+
+    try:
+        return max(1, int(configured))
+    except Exception:
+        logger.warning("Invalid MVSS thread config %s; using auto", configured)
+        return max(1, min(2, cpu_count))
+
+
+def _configured_opencv_threads():
+
+    try:
+        return max(0, int(os.getenv("OPENCV_NUM_THREADS", "0")))
+    except Exception:
+        logger.warning(
+            "Invalid OPENCV_NUM_THREADS=%s; using 0",
+            os.getenv("OPENCV_NUM_THREADS")
+        )
+        return 0
+
+
 def _backend_dir():
     return Path(__file__).resolve().parents[2]
 
@@ -59,6 +89,10 @@ def _mvss_cache_key(image_path, file_hash=None):
 
 
 class MVSSWorkerTimeout(Exception):
+    pass
+
+
+class MVSSWorkerCancelled(Exception):
     pass
 
 
@@ -123,6 +157,12 @@ def _start_worker():
     if not python_exe.exists():
         raise RuntimeError(f"MVSS venv Python not found: {python_exe}")
 
+    mvss_threads = _configured_mvss_threads()
+    opencv_threads = _configured_opencv_threads()
+    logger.info("CPU core count: %s", os.cpu_count())
+    logger.info("Starting MVSS worker with torch threads=%s", mvss_threads)
+    logger.info("Starting MVSS worker with OpenCV threads=%s", opencv_threads)
+
     process = subprocess.Popen(
         [
             str(python_exe),
@@ -137,6 +177,11 @@ def _start_worker():
         env={
             **os.environ,
             "MVSS_DEVICE": "cpu",
+            "MVSS_CPU_THREADS": str(mvss_threads),
+            "MVSS_NUM_THREADS": str(mvss_threads),
+            "OMP_NUM_THREADS": str(mvss_threads),
+            "MKL_NUM_THREADS": str(mvss_threads),
+            "OPENCV_NUM_THREADS": str(opencv_threads),
             "PYTHONUNBUFFERED": "1"
         }
     )
@@ -208,6 +253,9 @@ def _call_worker(image_path, timeout=None):
             raise
 
         if not response.get("ok"):
+            if response.get("cancelled"):
+                raise MVSSWorkerCancelled(response.get("error") or "MVSS analysis cancelled")
+
             raise RuntimeError(response.get("error") or "MVSS worker failed")
 
         return response["result"]
@@ -267,6 +315,22 @@ def analyze_tampering(image_path, file_hash=None):
             cache_lookup_seconds=cache_lookup_seconds
         )
 
+    except MVSSWorkerCancelled:
+        return {
+            **_mvss_inconclusive_result(
+                "MVSS analysis cancelled",
+                timed_out=False,
+                elapsed_seconds=time.perf_counter() - started_at,
+                cache_lookup_seconds=cache_lookup_seconds
+            ),
+            "skipped": True,
+            "cancelled": True,
+            "cancellation_requested": True,
+            "skip_reason": "decisive_signal",
+            "status": "cancelled_due_to_decisive_signal",
+            "reasons": ["MVSS analysis was cancelled because an earlier decisive signal was found"]
+        }
+
     except Exception as exc:
         if os.getenv("MVSS_ENABLE_ONESHOT_FALLBACK", "false").lower() == "true":
             logger.warning("MVSS persistent worker failed; falling back to one-shot subprocess: %s", exc)
@@ -297,6 +361,69 @@ def analyze_tampering(image_path, file_hash=None):
     return result
 
 
+def cancel_tampering_worker_current_job(reason="decisive_signal", timeout_seconds=5):
+    global _WORKER
+    global _WORKER_QUEUE
+    global _WORKER_READER
+
+    started_at = time.perf_counter()
+    cancellation = {
+        "requested": True,
+        "cancelled": False,
+        "already_stopped": False,
+        "forced_kill": False,
+        "seconds": 0,
+        "reason": reason,
+        "message": None
+    }
+
+    with _WORKER_LOCK:
+        process = _WORKER
+        output_queue = _WORKER_QUEUE
+
+        if process is None or process.poll() is not None:
+            cancellation["already_stopped"] = True
+            cancellation["seconds"] = round(time.perf_counter() - started_at, 3)
+            cancellation["message"] = "MVSS worker was not running"
+            logger.info(cancellation["message"])
+            return cancellation
+
+        logger.info("Cancelling MVSS worker for reason=%s pid=%s", reason, process.pid)
+
+        try:
+            process.terminate()
+            try:
+                process.wait(timeout=max(1, int(timeout_seconds)))
+            except subprocess.TimeoutExpired:
+                logger.warning("MVSS worker did not exit after terminate; force killing pid=%s", process.pid)
+                process.kill()
+                process.wait(timeout=max(1, int(timeout_seconds)))
+                cancellation["forced_kill"] = True
+
+            cancellation["cancelled"] = True
+            cancellation["message"] = "MVSS worker cancelled successfully"
+            logger.info(cancellation["message"])
+
+        except Exception as exc:
+            cancellation["message"] = f"MVSS cancellation failed: {exc}"
+            logger.exception("MVSS cancellation failed")
+
+        finally:
+            if output_queue is not None:
+                output_queue.put({
+                    "ok": False,
+                    "cancelled": True,
+                    "error": f"MVSS cancelled due to {reason}"
+                })
+
+            _WORKER = None
+            _WORKER_QUEUE = None
+            _WORKER_READER = None
+            cancellation["seconds"] = round(time.perf_counter() - started_at, 3)
+
+    return cancellation
+
+
 def stop_tampering_worker():
     global _WORKER
     global _WORKER_QUEUE
@@ -304,7 +431,15 @@ def stop_tampering_worker():
 
     with _WORKER_LOCK:
         if _WORKER is not None and _WORKER.poll() is None:
-            _WORKER.terminate()
+            try:
+                _WORKER.terminate()
+                _WORKER.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.warning("MVSS worker did not exit during shutdown; force killing pid=%s", _WORKER.pid)
+                _WORKER.kill()
+                _WORKER.wait(timeout=5)
+            except Exception:
+                logger.exception("Unable to stop MVSS worker cleanly")
 
         _WORKER = None
         _WORKER_QUEUE = None

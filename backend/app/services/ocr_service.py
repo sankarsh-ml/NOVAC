@@ -1,3 +1,4 @@
+import gc
 import os
 import re
 import time
@@ -7,10 +8,26 @@ import cv2
 from paddleocr import PaddleOCR
 
 
-ocr = PaddleOCR(
-    use_angle_cls=True,
-    lang="en"
-)
+ocr = None
+
+
+def _get_ocr():
+    global ocr
+
+    if ocr is None:
+        ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang="en"
+        )
+
+    return ocr
+
+
+def release_ocr_resources():
+    global ocr
+
+    ocr = None
+    gc.collect()
 
 
 OCR_VARIANT_DIR = Path("uploads") / "ocr_variants"
@@ -169,6 +186,44 @@ def _parse_ocr_result(result):
         "avg_confidence": round(avg_confidence, 3),
         "lines": line_results
     }
+
+
+def _image_dimensions(image_path):
+    image = cv2.imread(str(image_path))
+
+    if image is None:
+        return None, None
+
+    height, width = image.shape[:2]
+    return int(width), int(height)
+
+
+def _attach_ocr_dimensions(result, ocr_image_path, original_image_path):
+    source_w, source_h = _image_dimensions(
+        ocr_image_path
+    )
+    original_w, original_h = _image_dimensions(
+        original_image_path
+    )
+
+    if source_w and source_h:
+        result["source_image_width"] = source_w
+        result["source_image_height"] = source_h
+
+    if original_w and original_h:
+        result["original_image_width"] = original_w
+        result["original_image_height"] = original_h
+
+    for line in result.get("lines", []) or []:
+        if source_w and source_h:
+            line["source_image_width"] = source_w
+            line["source_image_height"] = source_h
+
+        if original_w and original_h:
+            line["original_image_width"] = original_w
+            line["original_image_height"] = original_h
+
+    return result
 
 
 def _quality_score(result):
@@ -546,7 +601,7 @@ def _variant_paths(image_path, include_upscaled=False, limit=None):
 
 def _run_ocr(image_path, use_cls=False):
 
-    result = ocr.ocr(
+    result = _get_ocr().ocr(
         image_path,
         cls=use_cls
     )
@@ -614,6 +669,11 @@ def extract_text(image_path):
             "original",
             use_cls=True
         )
+        original_result = _attach_ocr_dimensions(
+            original_result,
+            ocr_input_path,
+            image_path
+        )
     except Exception as exc:
         return {
             "text": "",
@@ -667,6 +727,11 @@ def extract_text(image_path):
                     variant_path,
                     candidate_name,
                     use_cls=False
+                )
+                variant_result = _attach_ocr_dimensions(
+                    variant_result,
+                    variant_path,
+                    image_path
                 )
 
                 variant_result["ocr_variant"] = os.path.basename(

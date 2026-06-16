@@ -3,8 +3,10 @@ import logging
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 from app.services.detector_cache import (
@@ -68,6 +70,59 @@ def _fallback(error, elapsed_time_seconds=0):
         ),
         "cache_hit": False
     }
+
+
+def _image_size(image_path):
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as image:
+            return {
+                "width": int(image.width),
+                "height": int(image.height)
+            }
+    except Exception:
+        return None
+
+
+def _trufor_debug_context(image_path, substep=None):
+    backend_dir = _backend_dir()
+    repo_candidates = [
+        backend_dir / "models" / "forgery" / "TruFor",
+        backend_dir / "models" / "forgery" / "trufor"
+    ]
+    trufor_root = next((path for path in repo_candidates if path.exists()), None)
+    checkpoint = _trufor_checkpoint()
+
+    return {
+        "cwd": os.getcwd(),
+        "python_executable": sys.executable,
+        "sys_path_relevant": [
+            item for item in sys.path
+            if "novac" in item.lower() or "trufor" in item.lower() or "forgery" in item.lower()
+        ][:12],
+        "trufor_root_path": str(trufor_root) if trufor_root else None,
+        "checkpoint_path": str(checkpoint) if checkpoint else None,
+        "image_path": str(image_path) if image_path else None,
+        "image_size": _image_size(image_path) if image_path else None,
+        "current_trufor_substep": substep
+    }
+
+
+def _log_trufor_failure(message, image_path, exc=None, substep=None):
+    context = _trufor_debug_context(image_path, substep=substep)
+
+    if exc is not None:
+        logger.error(
+            "%s | exception_type=%s message=%s traceback=%s context=%s",
+            message,
+            type(exc).__name__,
+            exc,
+            traceback.format_exc(),
+            context
+        )
+    else:
+        logger.error("%s | context=%s", message, context)
 
 
 def _backend_dir():
@@ -216,13 +271,41 @@ def _call_worker(image_path, file_hash=None, timeout_seconds=None):
             )
             process.stdin.flush()
             response = _WORKER_QUEUE.get(timeout=timeout_seconds + 10)
-        except Exception:
+        except queue.Empty as exc:
+            _log_trufor_failure(
+                f"TruFor worker timed out after {timeout_seconds} seconds",
+                image_path,
+                exc=exc,
+                substep="worker_response_wait"
+            )
+            with _WORKER_LOCK:
+                if _WORKER is not None and _WORKER.poll() is None:
+                    _WORKER.kill()
+            raise TimeoutError(f"TruFor worker timed out after {timeout_seconds} seconds") from exc
+        except Exception as exc:
+            _log_trufor_failure(
+                "TruFor worker call failed",
+                image_path,
+                exc=exc,
+                substep="worker_call"
+            )
             with _WORKER_LOCK:
                 if _WORKER is not None and _WORKER.poll() is None:
                     _WORKER.kill()
             raise
 
         if not response.get("ok"):
+            logger.error(
+                "TruFor worker returned error: type=%s message=%s substep=%s traceback=%s context=%s",
+                response.get("exception_type"),
+                response.get("error"),
+                response.get("current_trufor_substep"),
+                response.get("traceback"),
+                _trufor_debug_context(
+                    image_path,
+                    substep=response.get("current_trufor_substep")
+                )
+            )
             raise RuntimeError(response.get("error") or "TruFor worker failed")
 
         return response["result"]
@@ -301,17 +384,25 @@ def analyze_forgery_localization(
             timeout_seconds=timeout_seconds
         )
 
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, TimeoutError) as exc:
         message = f"TruFor inference timed out after {timeout_seconds} seconds"
+        _log_trufor_failure(
+            message,
+            image_path,
+            exc=exc,
+            substep="timeout"
+        )
         return _fallback(
             message,
             timeout_seconds
         )
 
     except Exception as exc:
-        logger.warning(
-            "TruFor persistent worker failed; falling back to one-shot subprocess: %s",
-            exc
+        _log_trufor_failure(
+            "TruFor persistent worker failed; falling back to one-shot subprocess",
+            image_path,
+            exc=exc,
+            substep="persistent_worker"
         )
 
         try:
@@ -321,6 +412,12 @@ def analyze_forgery_localization(
                 timeout_seconds=timeout_seconds
             )
         except Exception as fallback_exc:
+            _log_trufor_failure(
+                "TruFor one-shot subprocess failed",
+                image_path,
+                exc=fallback_exc,
+                substep="one_shot_subprocess"
+            )
             return _fallback(
                 f"Forgery localization failed to start: {fallback_exc}",
                 time.perf_counter() - started_at
