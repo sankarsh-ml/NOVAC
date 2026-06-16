@@ -1,6 +1,6 @@
-# NOVAC
+# NOVAC FAKE DOCUMENT AI
 
-NOVAC is an AI-powered document fraud detection and authenticity analysis system. It verifies uploaded documents using OCR, document quality checks, AI/synthetic document detection, forensic localization, visual tampering detection, text consistency checks, and automated PDF investigation reports.
+NOVAC FAKE DOCUMENT AI is an AI-powered document fraud detection and authenticity analysis system. It verifies uploaded documents using OCR, document quality checks, AI/synthetic document detection, forensic localization, visual tampering detection, text consistency checks, and automated PDF investigation reports.
 
 The system is designed to analyze documents such as Aadhaar cards, PAN cards, ID documents, certificates, and scanned PDFs, then return a structured fraud risk assessment with visual evidence and extracted fields.
 
