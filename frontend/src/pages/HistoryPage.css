@@ -99,3 +99,105 @@
 .delete-btn:hover {
   opacity: 0.9;
 }
+
+.extraction-status {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(148,163,184,.18);
+  color: #cbd5e1;
+  font-size: .82rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.extraction-status.completed {
+  background: rgba(34,197,94,.16);
+  color: #bbf7d0;
+}
+
+.extraction-status.failed {
+  background: rgba(239,68,68,.16);
+  color: #fecaca;
+}
+
+.extraction-status.skipped {
+  background: rgba(250,204,21,.16);
+  color: #fde68a;
+}
+
+.field-query-section {
+  margin: 24px 0;
+  background: #172235;
+  border: 1px solid #26364f;
+  border-radius: 16px;
+  padding: 20px;
+}
+
+.field-query-label {
+  display: block;
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: #ffffff;
+}
+
+.field-query-dropdown {
+  width: 100%;
+  max-width: 420px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #3b4c68;
+  background: #0f172a;
+  color: #ffffff;
+  font-size: 16px;
+  outline: none;
+}
+
+.field-inspection-card {
+  margin-top: 24px;
+  background: #172235;
+  border: 1px solid #26364f;
+  border-radius: 18px;
+  padding: 24px;
+}
+
+.field-inspection-card h2 {
+  margin-bottom: 20px;
+  color: #ffffff;
+}
+
+.field-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 0;
+  border-bottom: 1px solid #26364f;
+  color: #dbeafe;
+}
+
+.field-detail-row span {
+  color: #9fb3d1;
+}
+
+.field-crop-preview {
+  margin-top: 24px;
+}
+
+.field-crop-preview h3 {
+  margin-bottom: 12px;
+  color: #ffffff;
+}
+
+.field-crop-preview img {
+  max-width: 100%;
+  max-height: 260px;
+  border-radius: 12px;
+  border: 1px solid #334155;
+  background: #020617;
+}
+
+.crop-unavailable {
+  margin-top: 18px;
+  color: #facc15;
+}

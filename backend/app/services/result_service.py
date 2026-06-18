@@ -215,6 +215,15 @@ def get_all_results():
                 ).get(
                     "fraud_score",
                     0
+                ),
+
+            "field_extraction_status":
+                doc.get(
+                    "field_extraction",
+                    {}
+                ).get(
+                    "status",
+                    "not_run"
                 )
 
         })

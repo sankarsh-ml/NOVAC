@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from xml.sax.saxutils import escape
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from reportlab.lib import colors
@@ -25,6 +25,7 @@ from reportlab.platypus import (
 )
 
 from app.services.result_service import get_result_by_case_id
+from app.services.extraction_report_service import build_extraction_report
 
 
 router = APIRouter()
@@ -84,6 +85,31 @@ def _score(value, suffix=""):
         return f"{number}{suffix}"
     except Exception:
         return "N/A"
+
+
+LOW_RISK_MAX = 40
+
+
+def _get_fraud_score(result):
+    result = result or {}
+    fraud = result.get("fraud_analysis", {}) or {}
+
+    try:
+        return float(
+            fraud.get("fraud_score")
+            or result.get("fraud_score")
+            or result.get("fraudScore")
+            or result.get("risk_score")
+            or result.get("riskScore")
+            or result.get("score")
+            or 0
+        )
+    except Exception:
+        return 0
+
+
+def _is_low_risk_by_score(result):
+    return _get_fraud_score(result) < LOW_RISK_MAX
 
 
 def _format_datetime(value):
@@ -1655,7 +1681,8 @@ def generate_report(case_id: str):
     original_image = _scaled_image(result.get("analysis_image_path") or result.get("file_path"), 245, 315)
     annotated_image = (
         _scaled_image(result.get("annotated_image_path"), 245, 315)
-        if result.get("annotation_generated", bool(result.get("annotated_image_path")))
+        if not _is_low_risk_by_score(result)
+        and result.get("annotation_generated", bool(result.get("annotated_image_path")))
         else None
     )
 
@@ -1704,41 +1731,6 @@ def generate_report(case_id: str):
     _section(content, "Detector Contributions", styles)
     content.append(_wrapped_table(_contribution_rows(result, styles), [120, 85, 305]))
 
-    content.append(PageBreak())
-    _section(content, "Extracted Text", styles)
-    content.append(Paragraph("Structured Fields", styles["Body"]))
-    content.append(Spacer(1, 5))
-    content.append(_wrapped_table(_structured_field_rows(structured_fields, field_analysis, styles), [105, 185, 75, 145]))
-
-    content.append(Spacer(1, 10))
-    content.append(Paragraph("Possible Detected Values", styles["Body"]))
-    content.append(Spacer(1, 5))
-    content.append(_wrapped_table(_possible_value_rows(structured_fields, field_analysis, styles), [110, 165, 235]))
-
-    if DEBUG_REPORT:
-        content.append(Spacer(1, 10))
-        content.append(Paragraph("Cleaned Extracted Text", styles["Body"]))
-        text_panel = Table(
-            [[Paragraph(_safe(cleaned_text[:3500]).replace("\n", "<br/>"), styles["Body"])]],
-            colWidths=[510],
-            hAlign="LEFT"
-        )
-        text_panel.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
-            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cbd5e1")),
-            ("LEFTPADDING", (0, 0), (-1, -1), 9),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 9),
-            ("TOPPADDING", (0, 0), (-1, -1), 9),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 9)
-        ]))
-        content.append(text_panel)
-
-        content.append(PageBreak())
-        _section(content, "Debug OCR Appendix", styles)
-        content.append(Paragraph("Raw OCR lines are shown for debugging only. Low-confidence fragments are intentionally kept out of the main cleaned text.", styles["Muted"]))
-        content.append(Spacer(1, 6))
-        content.append(_wrapped_table(_raw_ocr_rows(result.get("lines", []) or [], styles), [32, 405, 73]))
-
     _section(content, "Final Verdict", styles)
     verdict_title, verdict_body, recommendation = _verdict(result, fraud_analysis, quality_analysis, authenticity_analysis)
     verdict_box = Table(
@@ -1769,4 +1761,38 @@ def generate_report(case_id: str):
         pdf_path,
         media_type="application/pdf",
         filename=f"{case_id}.pdf"
+    )
+
+
+@router.get("/api/extraction-report/{case_id}")
+def generate_extraction_report(
+    case_id: str,
+    mask_aadhaar: bool = Query(True)
+):
+    result = get_result_by_case_id(case_id)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    if not result.get("field_extraction"):
+        raise HTTPException(
+            status_code=404,
+            detail="Field extraction has not been run for this analysis yet."
+        )
+
+    try:
+        pdf_path = build_extraction_report(
+            result,
+            mask_aadhaar=mask_aadhaar
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Extraction report failed: {exc}")
+
+    suffix = "masked" if mask_aadhaar else "full"
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename=f"extraction_report_{case_id}_{suffix}.pdf"
     )

@@ -1,0 +1,54 @@
+{
+  "status": "completed",
+  "input_path": "D:\\novac\\backend\\field_extraction_model\\test_inputs\\govtid.jpg",
+  "document_type": "pan",
+  "document_type_confidence": 1.0,
+  "fields": {
+    "dob": {
+      "value": "20/04/1978",
+      "box_confidence": 0.8739,
+      "ocr_confidence": 0.996,
+      "bbox": [
+        41,
+        732,
+        551,
+        870
+      ]
+    },
+    "father_name": {
+      "value": "PADMANABHAN DVAKARAN",
+      "box_confidence": 0.835,
+      "ocr_confidence": 0.9679,
+      "bbox": [
+        49,
+        515,
+        1284,
+        678
+      ]
+    },
+    "pan_number": {
+      "value": "AHRPD5455C",
+      "box_confidence": 0.8311,
+      "ocr_confidence": 0.9927,
+      "bbox": [
+        30,
+        947,
+        678,
+        1085
+      ]
+    },
+    "name": {
+      "value": "D DINESH",
+      "box_confidence": 0.8115,
+      "ocr_confidence": 0.9308,
+      "bbox": [
+        52,
+        347,
+        519,
+        494
+      ]
+    }
+  },
+  "missing_fields": [],
+  "warnings": []
+}

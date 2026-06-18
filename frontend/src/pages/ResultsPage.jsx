@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import API from "../services/api";
 import Navbar from "../components/Navbar";
@@ -16,6 +16,30 @@ const skipReasonText = (reason) => {
   };
 
   return labels[reason] ?? "a decisive signal was already detected";
+};
+
+const LOW_RISK_MAX = 40;
+
+function getFraudScore(result) {
+  return Number(
+    result?.fraud_analysis?.fraud_score
+    ?? result?.fraud_score
+    ?? result?.fraudScore
+    ?? result?.risk_score
+    ?? result?.riskScore
+    ?? result?.score
+    ?? 0
+  );
+}
+
+function isLowRiskByScore(result) {
+  const score = getFraudScore(result);
+
+  if (!Number.isFinite(score)) {
+    return false;
+  }
+
+  return score < LOW_RISK_MAX;
 };
 
 const DetectorCard = ({
@@ -44,8 +68,11 @@ const DetectorCard = ({
 
 function ResultsPage() {
   const { caseId } = useParams();
+  const navigate = useNavigate();
 
   const [result, setResult] = useState(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractionError, setExtractionError] = useState("");
 
   useEffect(() => {
     let isActive = true;
@@ -71,6 +98,80 @@ function ResultsPage() {
       `http://127.0.0.1:8000/report/${caseId}`,
       "_blank"
     );
+  };
+
+  const isExtractionAllowed = () => {
+    const fraud = result?.fraud_analysis ?? {};
+    const statuses = [
+      fraud.result_status,
+      fraud.status,
+      result?.result_status,
+      result?.status,
+    ].map((value) => String(value ?? "").toLowerCase());
+    const risk = String(fraud.risk_level ?? "").toLowerCase();
+    const score = Number(fraud.fraud_score ?? 100);
+
+    if (
+      statuses.some((status) =>
+        [
+          "fraud_suspected",
+          "synthetic_suspected",
+          "unprocessable",
+          "failed",
+          "error",
+        ].includes(status)
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      [
+        "high risk",
+        "high",
+        "critical",
+        "synthetic document suspected",
+        "analysis inconclusive",
+        "analysis limited",
+      ].includes(risk)
+    ) {
+      return false;
+    }
+
+    return (
+      statuses.includes("passed")
+      || statuses.includes("success")
+      || ["low risk", "low", "safe", "real"].includes(risk)
+      || score < 25
+    );
+  };
+
+  const runExtraction = async () => {
+    setExtracting(true);
+    setExtractionError("");
+
+    try {
+      const response = await API.post(`/api/extract-fields/${caseId}`);
+      const extraction = response.data;
+
+      if (extraction?.status === "skipped") {
+        setResult((previous) => ({
+          ...previous,
+          field_extraction: extraction,
+        }));
+        return;
+      }
+
+      navigate(`/extraction-results/${caseId}`);
+    } catch (error) {
+      console.error(error);
+      setExtractionError(
+        error?.response?.data?.detail
+        ?? "Field extraction failed. Please try again."
+      );
+    } finally {
+      setExtracting(false);
+    }
   };
 
   const imageUrl = (path) =>
@@ -118,6 +219,17 @@ function ResultsPage() {
 
   const reasons =
     result?.fraud_analysis?.reasons ?? [];
+
+  const annotatedImagePath =
+    result?.annotated_image_path
+    ?? result?.annotated_image_url
+    ?? result?.annotatedImageUrl
+    ?? result?.suspicious_image_url
+    ?? result?.suspiciousRegionsImage;
+
+  const shouldShowAnnotatedImage =
+    !isLowRiskByScore(result)
+    && Boolean(annotatedImagePath);
 
   const components =
     result?.fraud_analysis?.components ?? {};
@@ -196,6 +308,9 @@ function ResultsPage() {
         : null
     );
 
+  const extractionAllowed = isExtractionAllowed();
+  const savedExtraction = result?.field_extraction;
+
   return (
     <>
       <Navbar />
@@ -211,8 +326,43 @@ function ResultsPage() {
             className="download-btn"
             onClick={downloadReport}
           >
-            Download Report
+            Download Fraud Report
           </button>
+        </div>
+
+        <div className="extraction-action-card">
+          <div>
+            <h2>Document Field Extraction</h2>
+            {extractionAllowed ? (
+              <p>
+                Run a separate field extraction pass after fraud verification.
+              </p>
+            ) : (
+              <p>
+                Field extraction skipped because the document did not pass fraud verification.
+              </p>
+            )}
+            {extractionError && (
+              <p className="inline-error">
+                {extractionError}
+              </p>
+            )}
+            {savedExtraction?.status === "skipped" && (
+              <p className="inline-warning">
+                {savedExtraction.reason}
+              </p>
+            )}
+          </div>
+
+          {extractionAllowed && (
+            <button
+              className="download-btn extraction-btn"
+              onClick={runExtraction}
+              disabled={extracting}
+            >
+              {extracting ? "Extracting fields..." : "Extract Document Fields"}
+            </button>
+          )}
         </div>
 
         <div className="stats-grid">
@@ -603,17 +753,17 @@ function ResultsPage() {
         </div>
 
         <div className="image-grid">
-          {result.annotation_generated !== false && result.annotated_image_path && (
+          {shouldShowAnnotatedImage && result.annotation_generated !== false && (
             <div>
               <h2>Suspicious Regions</h2>
               <img
-                src={imageUrl(result.annotated_image_path)}
+                src={imageUrl(annotatedImagePath)}
                 alt="Annotated Analysis"
               />
             </div>
           )}
 
-          {annotationMessage && (
+          {!isLowRiskByScore(result) && annotationMessage && (
             <div className="component-card">
               <h2>Suspicious Regions</h2>
               <p>{annotationMessage}</p>

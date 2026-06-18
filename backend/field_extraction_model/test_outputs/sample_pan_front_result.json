@@ -1,0 +1,54 @@
+{
+  "status": "completed",
+  "input_path": "D:\\novac\\backend\\field_extraction_model\\test_inputs\\sample_pan_front.jpg",
+  "document_type": "pan",
+  "document_type_confidence": 1.0,
+  "fields": {
+    "pan_number": {
+      "value": "GQBPK8700C",
+      "box_confidence": 0.894,
+      "ocr_confidence": 0.9749,
+      "bbox": [
+        1232,
+        924,
+        2968,
+        1382
+      ]
+    },
+    "name": {
+      "value": "ATH KOCHERLASRIKANTH",
+      "box_confidence": 0.8206,
+      "ocr_confidence": 0.8981,
+      "bbox": [
+        150,
+        1429,
+        1554,
+        1734
+      ]
+    },
+    "father_name": {
+      "value": "FT FATHER'S MUKKANTLKOCHERLA",
+      "box_confidence": 0.796,
+      "ocr_confidence": 0.9257,
+      "bbox": [
+        139,
+        1758,
+        1546,
+        2085
+      ]
+    },
+    "dob": {
+      "value": "04/05/1997",
+      "box_confidence": 0.6432,
+      "ocr_confidence": 0.9983,
+      "bbox": [
+        138,
+        2285,
+        1002,
+        2527
+      ]
+    }
+  },
+  "missing_fields": [],
+  "warnings": []
+}

@@ -1,0 +1,66 @@
+{
+  "status": "completed",
+  "input_path": "D:\\novac\\backend\\field_extraction_model\\test_inputs\\EAadhaar_0013070160836520241213145234_2609202517433_unlocked.pdf",
+  "document_type": "aadhaar",
+  "document_type_confidence": 0.8824,
+  "fields": {
+    "address": {
+      "value": "C/O: D Dinesh, 14A/23, F1-Adhiti Anandam, Kanniappan Street, Vetri Nagar VTC: Jawahar Nagar, PO: Jawahar Nagar, Sub District:Chennai, District: Chennai, State: Tamil Nadu, PIN Code: 600082, Mobile:9962955993",
+      "box_confidence": 0.7923,
+      "ocr_confidence": 0.9763,
+      "bbox": [
+        167,
+        635,
+        360,
+        812
+      ]
+    },
+    "aadhaar_number": {
+      "value": "xxxx-xxxx-8242",
+      "box_confidence": 0.7579,
+      "ocr_confidence": 0.9897,
+      "bbox": [
+        779,
+        1385,
+        951,
+        1419
+      ],
+      "raw_value": "891377078242"
+    },
+    "dob": {
+      "value": "05/08/2006",
+      "box_confidence": 0.7508,
+      "ocr_confidence": 0.9777,
+      "bbox": [
+        361,
+        1250,
+        459,
+        1276
+      ]
+    },
+    "gender": {
+      "value": "Male",
+      "box_confidence": 0.6129,
+      "ocr_confidence": 0.9989,
+      "bbox": [
+        310,
+        1269,
+        357,
+        1297
+      ]
+    },
+    "name": {
+      "value": "SANKARSH PONNATH",
+      "box_confidence": 0.478,
+      "ocr_confidence": 0.9868,
+      "bbox": [
+        259,
+        1229,
+        364,
+        1253
+      ]
+    }
+  },
+  "missing_fields": [],
+  "warnings": []
+}

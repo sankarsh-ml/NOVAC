@@ -1,0 +1,57 @@
+{
+  "status": "completed",
+  "input_path": "D:\\novac\\backend\\field_extraction_model\\test_inputs\\sample_aadhaar_front.jpg",
+  "document_type": "aadhaar",
+  "document_type_confidence": 1.0,
+  "fields": {
+    "aadhaar_number": {
+      "value": "xxxx-xxxx-4947",
+      "box_confidence": 0.8547,
+      "ocr_confidence": 0.9981,
+      "bbox": [
+        302,
+        299,
+        500,
+        335
+      ],
+      "raw_value": "923369264947"
+    },
+    "gender": {
+      "value": "Male",
+      "box_confidence": 0.8306,
+      "ocr_confidence": 0.9982,
+      "bbox": [
+        331,
+        225,
+        388,
+        252
+      ]
+    },
+    "name": {
+      "value": "HARVENDRA SINGH",
+      "box_confidence": 0.8281,
+      "ocr_confidence": 0.9789,
+      "bbox": [
+        288,
+        169,
+        445,
+        205
+      ]
+    },
+    "dob": {
+      "value": "20/08/2001",
+      "box_confidence": 0.8055,
+      "ocr_confidence": 0.9986,
+      "bbox": [
+        412,
+        205,
+        492,
+        231
+      ]
+    }
+  },
+  "missing_fields": [
+    "address"
+  ],
+  "warnings": []
+}

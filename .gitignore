@@ -16,6 +16,7 @@ backend/models/forgery/checkpoints/
 backend/models/forgery/**/*.pth
 backend/models/forgery/**/*.pth.tar
 backend/models/forgery/**/*.zip
+backend/field_extraction_venv 
 
 # Python cache
 __pycache__/

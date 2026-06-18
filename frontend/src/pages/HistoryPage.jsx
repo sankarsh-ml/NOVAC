@@ -170,6 +170,8 @@ function HistoryPage() {
 
                 <th>Fraud Score</th>
 
+                <th>Field Extraction</th>
+
                 <th>Actions</th>
 
               </tr>
@@ -183,7 +185,7 @@ function HistoryPage() {
                 <tr>
 
                   <td
-                    colSpan="5"
+                    colSpan="6"
                     style={{
                       textAlign:
                         "center",
@@ -226,6 +228,15 @@ function HistoryPage() {
                       {
                         result.fraud_score
                       }
+                    </td>
+
+                    <td>
+                      <span className={`extraction-status ${result.field_extraction_status ?? "not_run"}`}>
+                        {
+                          (result.field_extraction_status ?? "not_run")
+                            .replaceAll("_", " ")
+                        }
+                      </span>
                     </td>
 
                     <td>
